@@ -1,15 +1,23 @@
 {
   "name": "missing-translation",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/missing-translation.js",
   "bin": {
-    "missing-translation": "index.js"
+    "missing-translation": "dist/missing-translation.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "start": "npm run build && node dist/missing-translation.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "publish:lib": "npm run build && npm publish"
   },
   "keywords": [],
-  "author": "",
+  "author": "Your Name",
   "license": "ISC",
-  "description": ""
+  "description": "CLI tool to find missing translation keys in HTML and JSON files.",
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
 }
