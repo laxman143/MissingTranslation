@@ -1,6 +1,6 @@
 {
   "name": "missing-translation",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "dist/missing-translation.js",
   "bin": {
     "missing-translation": "dist/missing-translation.js"
@@ -15,9 +15,8 @@
   "author": "Your Name",
   "license": "ISC",
   "description": "CLI tool to find missing translation keys in HTML and JSON files.",
-  "dependencies": {},
   "devDependencies": {
-    "typescript": "^5.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
   }
 }

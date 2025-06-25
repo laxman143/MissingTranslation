@@ -89,16 +89,46 @@ function findMissingTranslations(
         console.error(`Skipping file due to encoding error: ${filepath}`);
         return;
       }
-      // Find static text
-      const staticTextMatches = Array.from(content.matchAll(/>([^<>{{\[]*?)</g));
+      // Find static text - improved to better handle HTML content
+      // First, remove all Angular template expressions to avoid processing them
+      const contentWithoutExpressions = content.replace(/\{\{[^}]*\}\}/g, '');
+      
+      // Remove HTML comments to avoid processing them as static text
+      const contentWithoutComments = contentWithoutExpressions.replace(/<!--[\s\S]*?-->/g, '');
+      
+      // Also remove HTML attributes to avoid processing them as static text
+      // This handles both regular attributes and Angular template attributes
+      const contentWithoutAttributes = contentWithoutComments
+        .replace(/\s+[a-zA-Z\-\[\]]+="[^"]*"/g, '') // Regular attributes
+        .replace(/\s+\[[^\]]+\]="[^"]*"/g, '') // Angular template attributes like [routerLink]
+        .replace(/\s+\([^)]+\)="[^"]*"/g, '') // Angular event attributes like (click)
+        .replace(/\s+[a-zA-Z\-\[\]]+='[^']*'/g, '') // Attributes with single quotes
+        .replace(/\s+\[[^\]]+\]='[^']*'/g, '') // Angular template attributes with single quotes
+        .replace(/\s+\([^)]+\)='[^']*'/g, ''); // Angular event attributes with single quotes
+      
+      const staticTextMatches = Array.from(contentWithoutAttributes.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
-        staticTextMatches.map((m) => m[1].trim()).filter((t) => t)
+        staticTextMatches
+          .map((m) => m[1].trim())
+          .filter((t) => t && !isNumericOnly(t))
       );
+      
+      // Also find text content within HTML tags more accurately (but exclude expressions and attributes)
+      const htmlTextMatches = Array.from(contentWithoutAttributes.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
+      const htmlText = new Set(
+        htmlTextMatches
+          .map((m) => m[1].trim())
+          .filter((t) => t && !isNumericOnly(t))
+      );
+      
+      // Combine both sets
+      const allStaticText = new Set([...staticText, ...htmlText]);
       // Find transloco pipe keys
       const translocoMatches = Array.from(content.matchAll(/{{\s*'([^']+)'\s*\|\s*transloco\s*}}/g));
       const translocoKeys = new Set(translocoMatches.map((m) => m[1]));
+  
       // Check missing static text
-      for (const key of staticText) {
+      for (const key of allStaticText) {
         let isTranslated = false;
         for (const keys of Object.values(allTranslations)) {
           if (keys.has(key)) {
@@ -160,43 +190,114 @@ function main() {
       totalMissingTransloco,
       totalMissingKeysEn,
     } = result;
+
+    // Generate detailed report
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    
+    const timestamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+    const reportFileName = `missing-translations-report-${timestamp}.txt`;
+    
+    let reportContent = 'MISSING TRANSLATIONS REPORT\n';
+    reportContent += '==========================\n\n';
+    
+    // Report missing keys compared to en.json
     if (Object.keys(missingKeysEn).length > 0) {
-      console.log('Missing Keys Compared to en.json (excluding object-like keys):');
+      reportContent += 'MISSING KEYS COMPARED TO EN.JSON (excluding object-like keys):\n';
+      reportContent += '=============================================================\n';
       for (const file in missingKeysEn) {
-        console.log(`  ${file}:`);
+        reportContent += `\n${file}:\n`;
         for (const key of missingKeysEn[file]) {
-          console.log(`    - ${key}`);
+          reportContent += `  - ${key}\n`;
         }
       }
     } else {
-      console.log('No missing keys found compared to en.json (excluding object-like keys).');
+      reportContent += 'No missing keys found compared to en.json (excluding object-like keys).\n';
     }
+    
+    // Report missing static translations
     if (Object.keys(missingTranslationsHtml).length > 0) {
-      console.log('\nMissing Static Translations in HTML Files:');
+      reportContent += '\n\nMISSING STATIC TRANSLATIONS IN HTML FILES:\n';
+      reportContent += '===========================================\n';
       for (const key in missingTranslationsHtml) {
-        console.log(`  Key: ${key}`);
+        reportContent += `\nKey: ${key}\n`;
         for (const file of missingTranslationsHtml[key]) {
-          console.log(`    - ${file}`);
+          reportContent += `  - ${file}\n`;
         }
       }
     } else {
-      console.log('\nNo missing static translations found in HTML files.');
+      reportContent += '\nNo missing static translations found in HTML files.\n';
     }
+    
+    // Report missing transloco keys
     if (Object.keys(missingTranslocoKeys).length > 0) {
-      console.log('\nMissing Word which is not in translation file and showing in HTML:');
+      reportContent += '\n\nMISSING TRANLOCO PIPE KEYS:\n';
+      reportContent += '===========================\n';
       for (const key in missingTranslocoKeys) {
-        console.log(`  Key: ${key}`);
+        reportContent += `\nKey: ${key}\n`;
         for (const file of missingTranslocoKeys[key]) {
-          console.log(`    - ${file}`);
+          reportContent += `  - ${file}\n`;
         }
       }
     } else {
-      console.log('\nNo missing transloco pipe keys found in HTML files.');
+      reportContent += '\nNo missing transloco pipe keys found in HTML files.\n';
     }
+    
+    // Add summary to report
+    reportContent += '\n\nSUMMARY:\n';
+    reportContent += '========\n';
+    reportContent += `Total missing static translations: ${totalMissingStatic}\n`;
+    reportContent += `Total missing transloco pipe keys: ${totalMissingTransloco}\n`;
+    reportContent += `Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}\n`;
+    reportContent += `\nReport generated on: ${new Date().toLocaleString()}\n`;
+    
+    // Save report to file
+    const currentDir = process.cwd();
+    const fullPath = path.join(currentDir, reportFileName);
+    
+    try {
+      fs.writeFileSync(fullPath, reportContent, 'utf-8');
+      console.log(`\nReport saved successfully to: ${fullPath}`);
+    } catch (error) {
+      console.error(`Error saving report: ${error}`);
+      // Fallback: try to save in current directory with a simpler name
+      const fallbackFileName = `missing-translations-report.txt`;
+      try {
+        fs.writeFileSync(fallbackFileName, reportContent, 'utf-8');
+        console.log(`\nReport saved to fallback location: ${fallbackFileName}`);
+      } catch (fallbackError) {
+        console.error(`Failed to save report: ${fallbackError}`);
+      }
+    }
+    
+    // Only show summary in terminal
     console.log('\nSummary:');
     console.log(`  Total missing static translations: ${totalMissingStatic}`);
-    console.log(`  Total missing Word which is not in translation file: ${totalMissingTransloco}`);
+    console.log(`  Total missing transloco pipe keys: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
+    console.log(`\nDetailed report saved to: ${reportFileName}`);
+    
+    // List all report files in current directory
+    try {
+      const files = fs.readdirSync(currentDir);
+      const reportFiles = files.filter(file => file.startsWith('missing-translations-report'));
+      if (reportFiles.length > 0) {
+        console.log('\nAvailable report files in current directory:');
+        reportFiles.forEach(file => {
+          const filePath = path.join(currentDir, file);
+          const stats = fs.statSync(filePath);
+          console.log(`  - ${file} (${stats.size} bytes, created: ${stats.mtime.toLocaleString()})`);
+        });
+      }
+    } catch (listError) {
+      console.log('\nCould not list report files in directory');
+    }
+    
     console.log('Script completed successfully. Exit code: 0');
   } catch (e: any) {
     console.error(`An error occurred: ${e.message}`);
@@ -205,6 +306,28 @@ function main() {
   }
 }
 
+// Helper function to check if text is numeric-only or contains only digits, operators, and spaces
+function isNumericOnly(text: string): boolean {
+  // Remove all whitespace
+  const trimmed = text.replace(/\s+/g, '');
+  // Check if the text contains only digits, operators, and common mathematical symbols
+  const numericPattern = /^[\d+\-*/().><=!&\|]+$/;
+  // Also check if it's just multiple digits (like "123", "456", etc.)
+  const onlyDigitsPattern = /^\d+$/;
+  // Check for special characters and symbols that are typically not translated
+  const specialCharPattern = /^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]+$/;
+  // Check for patterns like "---", "___", "***" etc. (improved to catch more variations)
+  const repeatedCharPattern = /^[-_*#=+~`]{2,}$|^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]{2,}$/;
+  // Check for common non-translatable patterns (emails, URLs, etc.)
+  const nonTranslatablePattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^https?:\/\/|^www\.|^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$/;
+  
+  return numericPattern.test(trimmed) || 
+         onlyDigitsPattern.test(trimmed) || 
+         specialCharPattern.test(trimmed) || 
+         repeatedCharPattern.test(trimmed) ||
+         nonTranslatablePattern.test(trimmed);
+}
+
 if (require.main === module) {
   main();
-} 
+}
