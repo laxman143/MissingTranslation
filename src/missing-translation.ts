@@ -169,6 +169,8 @@ function findMissingTranslations(
         console.error(`Skipping file due to encoding error: ${filepath}`);
         return;
       }
+      // Remove HTML comments before processing lines
+      content = content.replace(/<!--[\s\S]*?-->/g, '');
       const lines = content.split(/\r?\n/);
       // Find static text and transloco keys with line numbers
       const staticTextOccurrences: { key: string, line: number }[] = [];
@@ -366,6 +368,52 @@ function main() {
     console.log(`  Total missing transloco pipe keys: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
     console.log(`\nDetailed report saved to: ${reportFileName}`);
+
+    // Print the same grouped summary for missing top-level objects and missing keys as in the report
+    if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
+      console.log('\nMISSING TRANSLATION STRUCTURE (compared to en.json):');
+      console.log('====================================================');
+      const allFiles = new Set([
+        ...Object.keys(missingTopLevelObjects),
+        ...Object.keys(missingKeysEn)
+      ]);
+      for (const file of allFiles) {
+        console.log(`\n${file}:`);
+        if (missingTopLevelObjects[file] && missingTopLevelObjects[file].length > 0) {
+          console.log('  Missing top-level objects:');
+          for (const key of missingTopLevelObjects[file]) {
+            console.log(`    - ${key}`);
+          }
+        }
+        if (missingKeysEn[file] && missingKeysEn[file].length > 0) {
+          console.log('  Missing keys:');
+          for (const key of missingKeysEn[file]) {
+            console.log(`    - ${key}`);
+          }
+        }
+      }
+    } else {
+      console.log('\nNo missing top-level objects or keys found compared to en.json.');
+    }
+
+    // Print clickable links for missing static translations
+    if (Object.keys(missingTranslationsHtml).length > 0) {
+      console.log('\nMissing Static Translations (clickable links):');
+      for (const key in missingTranslationsHtml) {
+        for (const fileLine of missingTranslationsHtml[key]) {
+          console.log(`  ${fileLine}  [Key: ${key}]`);
+        }
+      }
+    }
+    // Print clickable links for missing transloco keys
+    if (Object.keys(missingTranslocoKeys).length > 0) {
+      console.log('\nMissing Transloco Pipe Keys (clickable links):');
+      for (const key in missingTranslocoKeys) {
+        for (const fileLine of missingTranslocoKeys[key]) {
+          console.log(`  ${fileLine}  [Key: ${key}]`);
+        }
+      }
+    }
     
     // List all report files in current directory
     try {
