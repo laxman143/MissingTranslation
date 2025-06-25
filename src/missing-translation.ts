@@ -91,20 +91,46 @@ function findMissingTranslations(
       }
       // Find static text - improved to better handle HTML content
       // First, remove all Angular template expressions to avoid processing them
-      const contentWithoutExpressions = content.replace(/\{\{[^}]*\}\}/g, '');
+      // Handle both single-line and multi-line expressions
+      const contentWithoutExpressions = content
+        .replace(/\{\{[^}]*\}\}/g, '') // Single-line expressions
+        .replace(/\{\{[\s\S]*?\}\}/g, ''); // Multi-line expressions
       
       // Remove HTML comments to avoid processing them as static text
       const contentWithoutComments = contentWithoutExpressions.replace(/<!--[\s\S]*?-->/g, '');
       
+      // Remove complex Angular template attributes that span multiple lines
+      // This handles *ngIf, *ngFor, and other structural directives with complex conditions
+      const contentWithoutComplexAttributes = contentWithoutComments
+        .replace(/\s+\*ngIf\s*=\s*"[^"]*"/g, '') // Single-line *ngIf
+        .replace(/\s+\*ngIf\s*=\s*'[^']*'/g, '') // Single-line *ngIf with single quotes
+        .replace(/\s+\*ngFor\s*=\s*"[^"]*"/g, '') // Single-line *ngFor
+        .replace(/\s+\*ngFor\s*=\s*'[^']*'/g, '') // Single-line *ngFor with single quotes
+        // Handle multi-line structural directives by removing the entire attribute block
+        .replace(/\s+\*ngIf\s*=\s*"[^"]*[\s\S]*?"/g, '') // Multi-line *ngIf with double quotes
+        .replace(/\s+\*ngIf\s*=\s*'[^']*[\s\S]*?'/g, '') // Multi-line *ngIf with single quotes
+        .replace(/\s+\*ngFor\s*=\s*"[^"]*[\s\S]*?"/g, '') // Multi-line *ngFor with double quotes
+        .replace(/\s+\*ngFor\s*=\s*'[^']*[\s\S]*?'/g, '') // Multi-line *ngFor with single quotes
+        // Handle Angular's new control flow syntax (@if, @for) - only remove the directive lines
+        .replace(/^\s*@if\s*\([^)]*\)\s*\{/gm, '') // @if directive line
+        .replace(/^\s*@for\s*\([^)]*\)\s*\{/gm, '') // @for directive line
+        .replace(/^\s*@else\s*\{/gm, '') // @else directive line
+        .replace(/^\s*@else\s+if\s*\([^)]*\)\s*\{/gm, ''); // @else if directive line
+      
       // Also remove HTML attributes to avoid processing them as static text
       // This handles both regular attributes and Angular template attributes
-      const contentWithoutAttributes = contentWithoutComments
+      const contentWithoutAttributes = contentWithoutComplexAttributes
         .replace(/\s+[a-zA-Z\-\[\]]+="[^"]*"/g, '') // Regular attributes
         .replace(/\s+\[[^\]]+\]="[^"]*"/g, '') // Angular template attributes like [routerLink]
         .replace(/\s+\([^)]+\)="[^"]*"/g, '') // Angular event attributes like (click)
         .replace(/\s+[a-zA-Z\-\[\]]+='[^']*'/g, '') // Attributes with single quotes
         .replace(/\s+\[[^\]]+\]='[^']*'/g, '') // Angular template attributes with single quotes
-        .replace(/\s+\([^)]+\)='[^']*'/g, ''); // Angular event attributes with single quotes
+        .replace(/\s+\([^)]+\)='[^']*'/g, '') // Angular event attributes with single quotes
+        // Handle multi-line Angular template attributes like *ngIf
+        .replace(/\s+\*ngIf\s*=\s*"[^"]*"/g, '') // *ngIf with double quotes
+        .replace(/\s+\*ngIf\s*=\s*'[^']*'/g, '') // *ngIf with single quotes
+        .replace(/\s+\[ngIf\]\s*=\s*"[^"]*"/g, '') // [ngIf] with double quotes
+        .replace(/\s+\[ngIf\]\s*=\s*'[^']*'/g, ''); // [ngIf] with single quotes
       
       const staticTextMatches = Array.from(contentWithoutAttributes.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
@@ -208,7 +234,7 @@ function main() {
     
     // Report missing keys compared to en.json
     if (Object.keys(missingKeysEn).length > 0) {
-      reportContent += 'MISSING KEYS COMPARED TO EN.JSON (excluding object-like keys):\n';
+      reportContent += 'MISSING KEYS COMPARED TO EN.JSON:\n';
       reportContent += '=============================================================\n';
       for (const file in missingKeysEn) {
         reportContent += `\n${file}:\n`;
