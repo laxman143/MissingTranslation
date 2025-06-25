@@ -126,7 +126,7 @@ function findMissingTranslations(
       const staticText = new Set(
         staticTextMatches
           .map((m) => m[1].trim())
-          .filter((t) => t && !isNumericOnly(t))
+          .filter((t) => t && !isNumericOnly(t) && !isIgnorableHtmlEntity(t))
       );
       
       // Also find text content within HTML tags more accurately (but exclude expressions and attributes)
@@ -134,7 +134,7 @@ function findMissingTranslations(
       const htmlText = new Set(
         htmlTextMatches
           .map((m) => m[1].trim())
-          .filter((t) => t && !isNumericOnly(t))
+          .filter((t) => t && !isNumericOnly(t) && !isIgnorableHtmlEntity(t))
       );
       
       // Combine both sets
@@ -342,6 +342,12 @@ function isNumericOnly(text: string): boolean {
          specialCharPattern.test(trimmed) || 
          repeatedCharPattern.test(trimmed) ||
          nonTranslatablePattern.test(trimmed);
+}
+
+// Helper function to check if text is an ignorable HTML entity
+function isIgnorableHtmlEntity(text: string): boolean {
+  // Ignore &nbsp;, &nbsp, and any other HTML entity if needed
+  return /^&nbsp;?$/i.test(text.trim());
 }
 
 if (require.main === module) {
