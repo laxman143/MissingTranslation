@@ -207,7 +207,7 @@ function main() {
       console.log('\nNo missing transloco pipe keys found in HTML files.');
     }
     console.log('\nSummary:');
-    console.log(`  Total missing static translations: ${totalMissingStatic}`);
+    console.log(`  Total missing static translations1: ${totalMissingStatic}`);
     console.log(`  Total missing Word which is not in translation file: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
     console.log('Script completed successfully. Exit code: 0');
