@@ -92,7 +92,9 @@ function findMissingTranslations(
       // Find static text
       const staticTextMatches = Array.from(content.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
-        staticTextMatches.map((m) => m[1].trim()).filter((t) => t)
+        staticTextMatches
+          .map((m) => m[1].trim())
+          .filter((t) => t && !isNumericOnly(t))
       );
       // Find transloco pipe keys
       const translocoMatches = Array.from(content.matchAll(/{{\s*'([^']+)'\s*\|\s*transloco\s*}}/g));
@@ -203,6 +205,28 @@ function main() {
     console.log('Script failed. Exit code: 1');
     process.exit(1);
   }
+}
+
+// Helper function to check if text is numeric-only or contains only digits, operators, and spaces
+function isNumericOnly(text: string): boolean {
+  // Remove all whitespace
+  const trimmed = text.replace(/\s+/g, '');
+  // Check if the text contains only digits, operators, and common mathematical symbols
+  const numericPattern = /^[\d+\-*/().><=!&\|]+$/;
+  // Also check if it's just multiple digits (like "123", "456", etc.)
+  const onlyDigitsPattern = /^\d+$/;
+  // Check for special characters and symbols that are typically not translated
+  const specialCharPattern = /^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]+$/;
+  // Check for patterns like "---", "___", "***" etc.
+  const repeatedCharPattern = /^[-_*#=+~`]{2,}$/;
+  // Check for common non-translatable patterns (emails, URLs, etc.)
+  const nonTranslatablePattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^https?:\/\/|^www\.|^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$/;
+  
+  return numericPattern.test(trimmed) || 
+         onlyDigitsPattern.test(trimmed) || 
+         specialCharPattern.test(trimmed) || 
+         repeatedCharPattern.test(trimmed) ||
+         nonTranslatablePattern.test(trimmed);
 }
 
 if (require.main === module) {
