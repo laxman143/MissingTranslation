@@ -89,18 +89,29 @@ function findMissingTranslations(
         console.error(`Skipping file due to encoding error: ${filepath}`);
         return;
       }
-      // Find static text
+      // Find static text - improved to better handle HTML content
       const staticTextMatches = Array.from(content.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
         staticTextMatches
           .map((m) => m[1].trim())
           .filter((t) => t && !isNumericOnly(t))
       );
+      
+      // Also find text content within HTML tags more accurately
+      const htmlTextMatches = Array.from(content.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
+      const htmlText = new Set(
+        htmlTextMatches
+          .map((m) => m[1].trim())
+          .filter((t) => t && !isNumericOnly(t))
+      );
+      
+      // Combine both sets
+      const allStaticText = new Set([...staticText, ...htmlText]);
       // Find transloco pipe keys
       const translocoMatches = Array.from(content.matchAll(/{{\s*'([^']+)'\s*\|\s*transloco\s*}}/g));
       const translocoKeys = new Set(translocoMatches.map((m) => m[1]));
       // Check missing static text
-      for (const key of staticText) {
+      for (const key of allStaticText) {
         let isTranslated = false;
         for (const keys of Object.values(allTranslations)) {
           if (keys.has(key)) {
@@ -217,8 +228,8 @@ function isNumericOnly(text: string): boolean {
   const onlyDigitsPattern = /^\d+$/;
   // Check for special characters and symbols that are typically not translated
   const specialCharPattern = /^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]+$/;
-  // Check for patterns like "---", "___", "***" etc.
-  const repeatedCharPattern = /^[-_*#=+~`]{2,}$/;
+  // Check for patterns like "---", "___", "***" etc. (improved to catch more variations)
+  const repeatedCharPattern = /^[-_*#=+~`]{2,}$|^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]{2,}$/;
   // Check for common non-translatable patterns (emails, URLs, etc.)
   const nonTranslatablePattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^https?:\/\/|^www\.|^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$/;
   
