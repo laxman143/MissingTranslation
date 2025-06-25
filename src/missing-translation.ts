@@ -9,6 +9,27 @@ interface Result {
   totalMissingStatic: number;
   totalMissingTransloco: number;
   totalMissingKeysEn: number;
+  objectKeyMismatches: Record<string, string[]>;
+  missingTopLevelObjects: Record<string, string[]>;
+}
+
+// Helper function to flatten nested objects into dot-separated keys and track object keys
+function flattenObject(obj: any, prefix = '', objectKeys = new Set<string>()): { flat: Record<string, any>, objectKeys: Set<string> } {
+  let result: Record<string, any> = {};
+  for (const key in obj) {
+    if (!obj.hasOwnProperty(key)) continue;
+    const value = obj[key];
+    const newKey = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      objectKeys.add(newKey);
+      const { flat, objectKeys: childObjectKeys } = flattenObject(value, newKey, objectKeys);
+      Object.assign(result, flat);
+      childObjectKeys.forEach(k => objectKeys.add(k));
+    } else {
+      result[newKey] = value;
+    }
+  }
+  return { flat: result, objectKeys };
 }
 
 function findMissingTranslations(
@@ -19,34 +40,88 @@ function findMissingTranslations(
   // Part 1: Find missing keys compared to en.json (excluding object-like keys)
   let enTranslations: Record<string, any> = {};
   let enKeys: Set<string> = new Set();
+  let enTopLevelObjects: Set<string> = new Set();
+  let enObjectKeys: Set<string> = new Set();
   try {
-    enTranslations = JSON.parse(fs.readFileSync(enFile, 'utf-8'));
+    const enRaw = JSON.parse(fs.readFileSync(enFile, 'utf-8'));
+    for (const key in enRaw) {
+      if (typeof enRaw[key] === 'object' && enRaw[key] !== null && !Array.isArray(enRaw[key])) {
+        enTopLevelObjects.add(key);
+      }
+    }
+    const enResult = flattenObject(enRaw);
+    enTranslations = enResult.flat;
     enKeys = new Set(Object.keys(enTranslations));
+    enObjectKeys = enResult.objectKeys;
+    console.log('Flattened en.json keys:', Object.keys(enTranslations));
+    console.log('en.json object keys:', Array.from(enObjectKeys));
+    console.log('en.json top-level objects:', Array.from(enTopLevelObjects));
   } catch (e) {
     console.error(`Error: English translation file not found or invalid: ${enFile}`);
     process.exit(1);
   }
 
   const missingKeysEn: Record<string, string[]> = {};
+  const objectKeyMismatches: Record<string, string[]> = {};
+  const missingTopLevelObjects: Record<string, string[]> = {};
   let totalMissingKeysEn = 0;
 
   for (const file of translationFiles) {
     if (file !== enFile) {
       let translations: Record<string, any> = {};
       let keys: Set<string> = new Set();
+      let objectKeys: Set<string> = new Set();
+      let topLevelObjects: Set<string> = new Set();
       try {
-        translations = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        for (const key in raw) {
+          if (typeof raw[key] === 'object' && raw[key] !== null && !Array.isArray(raw[key])) {
+            topLevelObjects.add(key);
+          }
+        }
+        const result = flattenObject(raw);
+        translations = result.flat;
         keys = new Set(Object.keys(translations));
+        objectKeys = result.objectKeys;
+        console.log(`Flattened keys for ${file}:`, Object.keys(translations));
+        console.log(`${file} object keys:`, Array.from(objectKeys));
+        console.log(`${file} top-level objects:`, Array.from(topLevelObjects));
       } catch (e) {
         console.error(`Error: Translation file not found or invalid: ${file}`);
         continue;
       }
-      const enKeysFiltered = new Set(Array.from(enKeys).filter((key) => !key.includes('.')));
-      const keysFiltered = new Set(Array.from(keys).filter((key) => !key.includes('.')));
-      const missing = Array.from(enKeysFiltered).filter((key) => !keysFiltered.has(key));
+      // Check for missing keys (only check leaf keys, not object keys)
+      const missing = Array.from(enKeys)
+        .filter((key) => !enObjectKeys.has(key)) // Only leaf keys
+        .filter((key) => !keys.has(key));
       if (missing.length > 0) {
         missingKeysEn[file] = missing;
         totalMissingKeysEn += missing.length;
+      }
+      // Check for object key mismatches
+      const objectMismatches: string[] = [];
+      for (const objKey of enObjectKeys) {
+        if (keys.has(objKey) && !objectKeys.has(objKey)) {
+          objectMismatches.push(objKey + ' (should be object)');
+        }
+      }
+      for (const objKey of objectKeys) {
+        if (enKeys.has(objKey) && !enObjectKeys.has(objKey)) {
+          objectMismatches.push(objKey + ' (should NOT be object)');
+        }
+      }
+      if (objectMismatches.length > 0) {
+        objectKeyMismatches[file] = objectMismatches;
+      }
+      // Check for missing top-level objects
+      const missingObjects: string[] = [];
+      for (const obj of enTopLevelObjects) {
+        if (!topLevelObjects.has(obj)) {
+          missingObjects.push(obj);
+        }
+      }
+      if (missingObjects.length > 0) {
+        missingTopLevelObjects[file] = missingObjects;
       }
     }
   }
@@ -80,6 +155,11 @@ function findMissingTranslations(
     }
   }
 
+  // Helper to strip quotes from a key
+  function stripQuotes(key: string): string {
+    return key.replace(/^['"]|['"]$/g, '');
+  }
+
   walk(rootDir, (filepath) => {
     if (filepath.endsWith('.html') && !filepath.endsWith('index.html')) {
       let content: string;
@@ -89,62 +169,29 @@ function findMissingTranslations(
         console.error(`Skipping file due to encoding error: ${filepath}`);
         return;
       }
-      // Find static text - improved to better handle HTML content
-      // First, remove all Angular template expressions to avoid processing them
-      // Handle both single-line and multi-line expressions
-      const contentWithoutExpressions = content
-        .replace(/\{\{[^}]*\}\}/g, '') // Single-line expressions
-        .replace(/\{\{[\s\S]*?\}\}/g, ''); // Multi-line expressions
-      
-      // Remove HTML comments to avoid processing them as static text
-      const contentWithoutComments = contentWithoutExpressions.replace(/<!--[\s\S]*?-->/g, '');
-      
-      // Remove complex Angular template attributes that span multiple lines
-      // This handles *ngIf, *ngFor, and other structural directives with complex conditions
-      const contentWithoutComplexAttributes = contentWithoutComments
-        .replace(/\s+\*ngIf\s*=\s*"[^"]*"/g, '') // Single-line *ngIf
-        .replace(/\s+\*ngIf\s*=\s*'[^']*'/g, '') // Single-line *ngIf with single quotes
-        .replace(/\s+\*ngFor\s*=\s*"[^"]*"/g, '') // Single-line *ngFor
-        .replace(/\s+\*ngFor\s*=\s*'[^']*'/g, '') // Single-line *ngFor with single quotes
-        // Handle multi-line structural directives by removing the entire attribute block
-        .replace(/\s+\*ngIf\s*=\s*"[^"]*[\s\S]*?"/g, '') // Multi-line *ngIf with double quotes
-        .replace(/\s+\*ngIf\s*=\s*'[^']*[\s\S]*?'/g, '') // Multi-line *ngIf with single quotes
-        .replace(/\s+\*ngFor\s*=\s*"[^"]*[\s\S]*?"/g, '') // Multi-line *ngFor with double quotes
-        .replace(/\s+\*ngFor\s*=\s*'[^']*[\s\S]*?'/g, '') // Multi-line *ngFor with single quotes
-        // Handle Angular's new control flow syntax (@if, @for) - only remove the directive lines
-        .replace(/^\s*@if\s*\([^)]*\)\s*\{/gm, '') // @if directive line
-        .replace(/^\s*@for\s*\([^)]*\)\s*\{/gm, '') // @for directive line
-        .replace(/^\s*@else\s*\{/gm, '') // @else directive line
-        .replace(/^\s*@else\s+if\s*\([^)]*\)\s*\{/gm, ''); // @else if directive line
-      
-      // Remove all attribute assignments (including multi-line, greedy)
-      // Handles *ngIf, *ngFor, @if, @for, and all other attributes
-      const contentWithoutAttributes = contentWithoutComplexAttributes
-        .replace(/\s+[^\s=>\/]+=(['"])[\s\S]*?\1/g, '');
-      
-      const staticTextMatches = Array.from(contentWithoutAttributes.matchAll(/>([^<>{{\[]*?)</g));
-      const staticText = new Set(
-        staticTextMatches
-          .map((m) => m[1].trim())
-          .filter((t) => t && !isNumericOnly(t) && !isIgnorableHtmlEntity(t))
-      );
-      
-      // Also find text content within HTML tags more accurately (but exclude expressions and attributes)
-      const htmlTextMatches = Array.from(contentWithoutAttributes.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
-      const htmlText = new Set(
-        htmlTextMatches
-          .map((m) => m[1].trim())
-          .filter((t) => t && !isNumericOnly(t) && !isIgnorableHtmlEntity(t))
-      );
-      
-      // Combine both sets
-      const allStaticText = new Set([...staticText, ...htmlText]);
-      // Find transloco pipe keys
-      const translocoMatches = Array.from(content.matchAll(/{{\s*'([^']+)'\s*\|\s*transloco\s*}}/g));
-      const translocoKeys = new Set(translocoMatches.map((m) => m[1]));
-  
+      const lines = content.split(/\r?\n/);
+      // Find static text and transloco keys with line numbers
+      const staticTextOccurrences: { key: string, line: number }[] = [];
+      const translocoKeyOccurrences: { key: string, line: number }[] = [];
+      lines.forEach((line, idx) => {
+        // Static text between > and <
+        Array.from(line.matchAll(/>([^<>{{\[]*?)</g)).forEach(m => {
+          const key = m[1].trim();
+          if (key && !isNumericOnly(key) && !isIgnorableHtmlEntity(key)) {
+            staticTextOccurrences.push({ key: stripQuotes(key), line: idx + 1 });
+          }
+        });
+        // Transloco pipe keys (support both single and double quotes)
+        Array.from(line.matchAll(/{{\s*['"]([^'"]+)['"]\s*\|\s*transloco\s*}}/g)).forEach(m => {
+          translocoKeyOccurrences.push({ key: stripQuotes(m[1]), line: idx + 1 });
+        });
+      });
+      // Debug: Show each key being checked from HTML
+      translocoKeyOccurrences.forEach(({ key, line }) => {
+        console.log(`Checking transloco key from HTML (${filepath}:${line}):`, key);
+      });
       // Check missing static text
-      for (const key of allStaticText) {
+      for (const { key, line } of staticTextOccurrences) {
         let isTranslated = false;
         for (const keys of Object.values(allTranslations)) {
           if (keys.has(key)) {
@@ -154,24 +201,29 @@ function findMissingTranslations(
         }
         if (!isTranslated) {
           if (!missingTranslationsHtml[key]) missingTranslationsHtml[key] = [];
-          missingTranslationsHtml[key].push(filepath);
+          missingTranslationsHtml[key].push(`${filepath}:${line}`);
           totalMissingStatic++;
         }
       }
       // Check missing transloco keys
-      for (const key of translocoKeys) {
-        if (key.includes('.')) continue;
-        let isTranslated = false;
-        for (const keys of Object.values(allTranslations)) {
-          if (keys.has(key)) {
-            isTranslated = true;
-            break;
+      for (const { key, line } of translocoKeyOccurrences) {
+        if (key.includes('.')) {
+          // Debug: Show all flattened en.json keys
+          if (filepath && line === 1) {
+            console.log('Flattened en.json keys:', Object.keys(allTranslations[enFile] || {}));
           }
-        }
-        if (!isTranslated) {
-          if (!missingTranslocoKeys[key]) missingTranslocoKeys[key] = [];
-          missingTranslocoKeys[key].push(filepath);
-          totalMissingTransloco++;
+          let isTranslated = false;
+          for (const keys of Object.values(allTranslations)) {
+            if (keys.has(key)) {
+              isTranslated = true;
+              break;
+            }
+          }
+          if (!isTranslated) {
+            if (!missingTranslocoKeys[key]) missingTranslocoKeys[key] = [];
+            missingTranslocoKeys[key].push(`${filepath}:${line}`);
+            totalMissingTransloco++;
+          }
         }
       }
     }
@@ -184,6 +236,8 @@ function findMissingTranslations(
     totalMissingStatic,
     totalMissingTransloco,
     totalMissingKeysEn,
+    objectKeyMismatches,
+    missingTopLevelObjects,
   };
 }
 
@@ -205,6 +259,8 @@ function main() {
       totalMissingStatic,
       totalMissingTransloco,
       totalMissingKeysEn,
+      objectKeyMismatches,
+      missingTopLevelObjects,
     } = result;
 
     // Generate detailed report
@@ -222,18 +278,31 @@ function main() {
     let reportContent = 'MISSING TRANSLATIONS REPORT\n';
     reportContent += '==========================\n\n';
     
-    // Report missing keys compared to en.json
-    if (Object.keys(missingKeysEn).length > 0) {
-      reportContent += 'MISSING KEYS COMPARED TO EN.JSON:\n';
-      reportContent += '=============================================================\n';
-      for (const file in missingKeysEn) {
+    // Combine missing top-level objects and missing keys into a single summary section
+    if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
+      reportContent += '\n\nMISSING TRANSLATION STRUCTURE (compared to en.json):\n';
+      reportContent += '====================================================\n';
+      const allFiles = new Set([
+        ...Object.keys(missingTopLevelObjects),
+        ...Object.keys(missingKeysEn)
+      ]);
+      for (const file of allFiles) {
         reportContent += `\n${file}:\n`;
-        for (const key of missingKeysEn[file]) {
-          reportContent += `  - ${key}\n`;
+        if (missingTopLevelObjects[file] && missingTopLevelObjects[file].length > 0) {
+          reportContent += '  Missing top-level objects:\n';
+          for (const key of missingTopLevelObjects[file]) {
+            reportContent += `    - ${key}\n`;
+          }
+        }
+        if (missingKeysEn[file] && missingKeysEn[file].length > 0) {
+          reportContent += '  Missing keys:\n';
+          for (const key of missingKeysEn[file]) {
+            reportContent += `    - ${key}\n`;
+          }
         }
       }
     } else {
-      reportContent += 'No missing keys found compared to en.json (excluding object-like keys).\n';
+      reportContent += '\nNo missing top-level objects or keys found compared to en.json.\n';
     }
     
     // Report missing static translations
