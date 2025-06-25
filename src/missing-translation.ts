@@ -93,15 +93,28 @@ function findMissingTranslations(
       // First, remove all Angular template expressions to avoid processing them
       const contentWithoutExpressions = content.replace(/\{\{[^}]*\}\}/g, '');
       
-      const staticTextMatches = Array.from(contentWithoutExpressions.matchAll(/>([^<>{{\[]*?)</g));
+      // Remove HTML comments to avoid processing them as static text
+      const contentWithoutComments = contentWithoutExpressions.replace(/<!--[\s\S]*?-->/g, '');
+      
+      // Also remove HTML attributes to avoid processing them as static text
+      // This handles both regular attributes and Angular template attributes
+      const contentWithoutAttributes = contentWithoutComments
+        .replace(/\s+[a-zA-Z\-\[\]]+="[^"]*"/g, '') // Regular attributes
+        .replace(/\s+\[[^\]]+\]="[^"]*"/g, '') // Angular template attributes like [routerLink]
+        .replace(/\s+\([^)]+\)="[^"]*"/g, '') // Angular event attributes like (click)
+        .replace(/\s+[a-zA-Z\-\[\]]+='[^']*'/g, '') // Attributes with single quotes
+        .replace(/\s+\[[^\]]+\]='[^']*'/g, '') // Angular template attributes with single quotes
+        .replace(/\s+\([^)]+\)='[^']*'/g, ''); // Angular event attributes with single quotes
+      
+      const staticTextMatches = Array.from(contentWithoutAttributes.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
         staticTextMatches
           .map((m) => m[1].trim())
           .filter((t) => t && !isNumericOnly(t))
       );
       
-      // Also find text content within HTML tags more accurately (but exclude expressions)
-      const htmlTextMatches = Array.from(contentWithoutExpressions.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
+      // Also find text content within HTML tags more accurately (but exclude expressions and attributes)
+      const htmlTextMatches = Array.from(contentWithoutAttributes.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
       const htmlText = new Set(
         htmlTextMatches
           .map((m) => m[1].trim())
@@ -113,6 +126,7 @@ function findMissingTranslations(
       // Find transloco pipe keys
       const translocoMatches = Array.from(content.matchAll(/{{\s*'([^']+)'\s*\|\s*transloco\s*}}/g));
       const translocoKeys = new Set(translocoMatches.map((m) => m[1]));
+  
       // Check missing static text
       for (const key of allStaticText) {
         let isTranslated = false;
@@ -245,4 +259,4 @@ function isNumericOnly(text: string): boolean {
 
 if (require.main === module) {
   main();
-} 
+}
