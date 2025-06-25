@@ -117,20 +117,11 @@ function findMissingTranslations(
         .replace(/^\s*@else\s*\{/gm, '') // @else directive line
         .replace(/^\s*@else\s+if\s*\([^)]*\)\s*\{/gm, ''); // @else if directive line
       
-      // Also remove HTML attributes to avoid processing them as static text
-      // This handles both regular attributes and Angular template attributes
+      // Remove all attribute assignments (including multi-line) before extracting static text
+      // Handles attr="..." and attr='...' even if they span multiple lines
       const contentWithoutAttributes = contentWithoutComplexAttributes
-        .replace(/\s+[a-zA-Z\-\[\]]+="[^"]*"/g, '') // Regular attributes
-        .replace(/\s+\[[^\]]+\]="[^"]*"/g, '') // Angular template attributes like [routerLink]
-        .replace(/\s+\([^)]+\)="[^"]*"/g, '') // Angular event attributes like (click)
-        .replace(/\s+[a-zA-Z\-\[\]]+='[^']*'/g, '') // Attributes with single quotes
-        .replace(/\s+\[[^\]]+\]='[^']*'/g, '') // Angular template attributes with single quotes
-        .replace(/\s+\([^)]+\)='[^']*'/g, '') // Angular event attributes with single quotes
-        // Handle multi-line Angular template attributes like *ngIf
-        .replace(/\s+\*ngIf\s*=\s*"[^"]*"/g, '') // *ngIf with double quotes
-        .replace(/\s+\*ngIf\s*=\s*'[^']*'/g, '') // *ngIf with single quotes
-        .replace(/\s+\[ngIf\]\s*=\s*"[^"]*"/g, '') // [ngIf] with double quotes
-        .replace(/\s+\[ngIf\]\s*=\s*'[^']*'/g, ''); // [ngIf] with single quotes
+        .replace(/\s+[a-zA-Z0-9_:\-\[\]\*\@]+\s*=\s*"[^"]*[\s\S]*?"/g, '') // double-quoted, multi-line
+        .replace(/\s+[a-zA-Z0-9_:\-\[\]\*\@]+\s*=\s*'[^']*[\s\S]*?'/g, ''); // single-quoted, multi-line
       
       const staticTextMatches = Array.from(contentWithoutAttributes.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
