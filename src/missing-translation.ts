@@ -90,15 +90,18 @@ function findMissingTranslations(
         return;
       }
       // Find static text - improved to better handle HTML content
-      const staticTextMatches = Array.from(content.matchAll(/>([^<>{{\[]*?)</g));
+      // First, remove all Angular template expressions to avoid processing them
+      const contentWithoutExpressions = content.replace(/\{\{[^}]*\}\}/g, '');
+      
+      const staticTextMatches = Array.from(contentWithoutExpressions.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
         staticTextMatches
           .map((m) => m[1].trim())
           .filter((t) => t && !isNumericOnly(t))
       );
       
-      // Also find text content within HTML tags more accurately
-      const htmlTextMatches = Array.from(content.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
+      // Also find text content within HTML tags more accurately (but exclude expressions)
+      const htmlTextMatches = Array.from(contentWithoutExpressions.matchAll(/<[^>]*>([^<]*?)<\/[^>]*>/g));
       const htmlText = new Set(
         htmlTextMatches
           .map((m) => m[1].trim())
@@ -207,7 +210,7 @@ function main() {
       console.log('\nNo missing transloco pipe keys found in HTML files.');
     }
     console.log('\nSummary:');
-    console.log(`  Total missing static translations1: ${totalMissingStatic}`);
+    console.log(`  Total missing static translations: ${totalMissingStatic}`);
     console.log(`  Total missing Word which is not in translation file: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
     console.log('Script completed successfully. Exit code: 0');
