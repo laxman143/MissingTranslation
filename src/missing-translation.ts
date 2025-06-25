@@ -117,11 +117,10 @@ function findMissingTranslations(
         .replace(/^\s*@else\s*\{/gm, '') // @else directive line
         .replace(/^\s*@else\s+if\s*\([^)]*\)\s*\{/gm, ''); // @else if directive line
       
-      // Remove all attribute assignments (including multi-line) before extracting static text
-      // Handles attr="..." and attr='...' even if they span multiple lines
+      // Remove all attribute assignments (including multi-line, greedy)
+      // Handles *ngIf, *ngFor, @if, @for, and all other attributes
       const contentWithoutAttributes = contentWithoutComplexAttributes
-        .replace(/\s+[a-zA-Z0-9_:\-\[\]\*\@]+\s*=\s*"[^"]*[\s\S]*?"/g, '') // double-quoted, multi-line
-        .replace(/\s+[a-zA-Z0-9_:\-\[\]\*\@]+\s*=\s*'[^']*[\s\S]*?'/g, ''); // single-quoted, multi-line
+        .replace(/\s+[^\s=>\/]+=(['"])[\s\S]*?\1/g, '');
       
       const staticTextMatches = Array.from(contentWithoutAttributes.matchAll(/>([^<>{{\[]*?)</g));
       const staticText = new Set(
