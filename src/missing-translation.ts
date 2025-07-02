@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from 'fs';
 import * as path from 'path';
+import { Command } from 'commander';
 
 interface Result {
   missingKeysEn: Record<string, string[]>;
@@ -35,7 +36,8 @@ function flattenObject(obj: any, prefix = '', objectKeys = new Set<string>()): {
 function findMissingTranslations(
   rootDir: string,
   translationFiles: string[],
-  enFile: string
+  enFile: string,
+  keyPrefix?: string
 ): Result {
   // Part 1: Find missing keys compared to en.json (excluding object-like keys)
   let enTranslations: Record<string, any> = {};
@@ -206,7 +208,7 @@ function findMissingTranslations(
       for (const { key, line } of staticTextOccurrences) {
         let isTranslated = false;
         for (const keys of Object.values(allTranslations)) {
-          if (keys.has(key)) {
+          if (keyExists(key, keys, keyPrefix)) {
             isTranslated = true;
             break;
           }
@@ -219,23 +221,24 @@ function findMissingTranslations(
       }
       // Check missing transloco keys
       for (const { key, line } of translocoKeyOccurrences) {
-        if (key.includes('.')) {
-          // Debug: Show all flattened en.json keys
-          if (filepath && line === 1) {
-            console.log('Flattened en.json keys:', Object.keys(allTranslations[enFile] || {}));
+        let isTranslated = false;
+        let checkedKey = key;
+        // If a prefix is provided, ensure it ends with a dot for matching
+        let effectivePrefix = keyPrefix ? (keyPrefix.endsWith('.') ? keyPrefix : keyPrefix + '.') : undefined;
+        // If the key starts with the (dot-appended) prefix, remove it ONCE from the start
+        if (effectivePrefix && key.startsWith(effectivePrefix)) {
+          checkedKey = key.slice(effectivePrefix.length);
+        }
+        for (const keys of Object.values(allTranslations)) {
+          if (keys.has(checkedKey)) {
+            isTranslated = true;
+            break;
           }
-          let isTranslated = false;
-          for (const keys of Object.values(allTranslations)) {
-            if (keys.has(key)) {
-              isTranslated = true;
-              break;
-            }
-          }
-          if (!isTranslated) {
-            if (!missingTranslocoKeys[key]) missingTranslocoKeys[key] = [];
-            missingTranslocoKeys[key].push(`${filepath}:${line}`);
-            totalMissingTransloco++;
-          }
+        }
+        if (!isTranslated) {
+          if (!missingTranslocoKeys[key]) missingTranslocoKeys[key] = [];
+          missingTranslocoKeys[key].push(`${filepath}:${line}`);
+          totalMissingTransloco++;
         }
       }
     }
@@ -253,17 +256,24 @@ function findMissingTranslations(
   };
 }
 
+// CLI setup
+const program = new Command();
+program
+  .argument('<srcDir>', 'Source directory to scan for translation keys')
+  .argument('<enFile>', 'Source translation file (e.g., en.json)')
+  .argument('[otherFiles...]', 'Other translation files to compare')
+  .option('--key-prefix <prefix>', 'Optional prefix to strip from translation keys')
+  .parse(process.argv);
+
+const [srcDir, enFile, ...otherFiles] = program.args;
+const options = program.opts();
+const keyPrefix = options.keyPrefix || undefined;
+
 // CLI
 function main() {
-  const argv = process.argv.slice(2);
-  if (argv.length < 3) {
-    console.log('Usage: missing-translation <rootDir> <enFile> <translationFile1> [translationFile2 ...]');
-    process.exit(1);
-  }
-  const [rootDir, enFile, ...translationFiles] = argv;
-  const files = [enFile, ...translationFiles];
+  const files = [enFile, ...otherFiles];
   try {
-    const result = findMissingTranslations(rootDir, files, enFile);
+    const result = findMissingTranslations(srcDir, files, enFile, keyPrefix);
     const {
       missingKeysEn,
       missingTranslationsHtml,
@@ -373,7 +383,7 @@ function main() {
     }
     
     // Only show summary in terminal
-    console.log('\nSummary:');
+    console.log('\nSummary 13:');
     console.log(`  Total missing static translations: ${totalMissingStatic}`);
     console.log(`  Missing Transloco Pipe Keys in translation json file: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
@@ -469,6 +479,18 @@ function isNumericOnly(text: string): boolean {
 function isIgnorableHtmlEntity(text: string): boolean {
   // Ignore &nbsp;, &nbsp, and any other HTML entity if needed
   return /^&nbsp;?$/i.test(text.trim());
+}
+
+// Helper function to check if a key exists in translations, with optional prefix logic
+function keyExists(key: string, keySet: Set<string>, prefix?: string): boolean {
+  // Always check the key as written
+  if (keySet.has(key)) return true;
+  // If a prefix is provided and the key starts with it, also check without the prefix
+  if (prefix && key.startsWith(prefix)) {
+    const strippedKey = key.slice(prefix.length);
+    if (keySet.has(strippedKey)) return true;
+  }
+  return false;
 }
 
 if (require.main === module) {

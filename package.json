@@ -1,6 +1,6 @@
 {
   "name": "missing-translation",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "main": "dist/missing-translation.js",
   "bin": {
     "missing-translation": "dist/missing-translation.js"
@@ -18,5 +18,8 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "commander": "^14.0.0"
   }
 }
