@@ -53,9 +53,6 @@ function findMissingTranslations(
     enTranslations = enResult.flat;
     enKeys = new Set(Object.keys(enTranslations));
     enObjectKeys = enResult.objectKeys;
-    console.log('Flattened en.json keys:', Object.keys(enTranslations));
-    console.log('en.json object keys:', Array.from(enObjectKeys));
-    console.log('en.json top-level objects:', Array.from(enTopLevelObjects));
   } catch (e) {
     console.error(`Error: English translation file not found or invalid: ${enFile}`);
     process.exit(1);
@@ -83,9 +80,6 @@ function findMissingTranslations(
         translations = result.flat;
         keys = new Set(Object.keys(translations));
         objectKeys = result.objectKeys;
-        console.log(`Flattened keys for ${file}:`, Object.keys(translations));
-        console.log(`${file} object keys:`, Array.from(objectKeys));
-        console.log(`${file} top-level objects:`, Array.from(topLevelObjects));
       } catch (e) {
         console.error(`Error: Translation file not found or invalid: ${file}`);
         continue;
@@ -156,6 +150,7 @@ function findMissingTranslations(
   }
 
   // Helper to strip quotes from a key
+  // Removes leading and trailing single or double quotes from a string
   function stripQuotes(key: string): string {
     return key.replace(/^['"]|['"]$/g, '');
   }
@@ -169,29 +164,44 @@ function findMissingTranslations(
         console.error(`Skipping file due to encoding error: ${filepath}`);
         return;
       }
-      // Remove HTML comments before processing lines
-      content = content.replace(/<!--[\s\S]*?-->/g, '');
+      // Remove HTML comments but preserve line count by replacing with newlines
+      // This ensures line numbers in the report match the original file
+      content = content.replace(/<!--[\s\S]*?-->/g, (match) => {
+        return match.replace(/[^\n]/g, '');
+      });
+      // Split file into lines for line-by-line processing
       const lines = content.split(/\r?\n/);
-      // Find static text and transloco keys with line numbers
+      // Arrays to store found static text and transloco keys with their line numbers
       const staticTextOccurrences: { key: string, line: number }[] = [];
       const translocoKeyOccurrences: { key: string, line: number }[] = [];
+
+      // --- Static text extraction ---
+      // For each line, extract visible static text between > and <
+      // Ignore if it contains Angular expressions ({{ ... }}) or is numeric/expression
       lines.forEach((line, idx) => {
-        // Static text between > and <
+        // For each match of static text between > and <
         Array.from(line.matchAll(/>([^<>{{\[]*?)</g)).forEach(m => {
-          const key = m[1].trim();
+          let key = m[1].trim();
+          key = stripQuotes(key);
+          // Ignore if the static text contains Angular expressions
+          if (key.includes('{{') || key.includes('}}')) return;
+          // Ignore if the static text is a number, logic, or JS-like expression
           if (key && !isNumericOnly(key) && !isIgnorableHtmlEntity(key)) {
-            staticTextOccurrences.push({ key: stripQuotes(key), line: idx + 1 });
+            staticTextOccurrences.push({ key, line: idx + 1 });
           }
         });
-        // Transloco pipe keys (support both single and double quotes)
-        Array.from(line.matchAll(/{{\s*['"]([^'"]+)['"]\s*\|\s*transloco\s*}}/g)).forEach(m => {
-          translocoKeyOccurrences.push({ key: stripQuotes(m[1]), line: idx + 1 });
+        // --- Transloco key extraction ---
+        // For each match of a transloco key in the form {{ 'key' | transloco }} or {{ "key" | transloco }}
+        Array.from(line.matchAll(/{{\s*['"]([^'\"]+)['"]\s*\|\s*transloco\s*}}/g)).forEach(m => {
+          let key = m[1].trim();
+          key = stripQuotes(key);
+          // Ignore if the key is a number, logic, or JS-like expression
+          if (key && !isNumericOnly(key)) {
+            translocoKeyOccurrences.push({ key, line: idx + 1 });
+          }
         });
       });
-      // Debug: Show each key being checked from HTML
-      translocoKeyOccurrences.forEach(({ key, line }) => {
-        console.log(`Checking transloco key from HTML (${filepath}:${line}):`, key);
-      });
+
       // Check missing static text
       for (const { key, line } of staticTextOccurrences) {
         let isTranslated = false;
@@ -282,7 +292,7 @@ function main() {
     
     // Combine missing top-level objects and missing keys into a single summary section
     if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
-      reportContent += '\n\nMISSING TRANSLATION STRUCTURE (compared to en.json):\n';
+      reportContent += '\n\nMISSING TRANSLATION STRUCTURE (compared to source json file like en.json):\n';
       reportContent += '====================================================\n';
       const allFiles = new Set([
         ...Object.keys(missingTopLevelObjects),
@@ -339,7 +349,7 @@ function main() {
     reportContent += '\n\nSUMMARY:\n';
     reportContent += '========\n';
     reportContent += `Total missing static translations: ${totalMissingStatic}\n`;
-    reportContent += `Total missing transloco pipe keys: ${totalMissingTransloco}\n`;
+    reportContent += `Total missing transloco pipe keys in translation json file: ${totalMissingTransloco}\n`;
     reportContent += `Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}\n`;
     reportContent += `\nReport generated on: ${new Date().toLocaleString()}\n`;
     
@@ -365,7 +375,7 @@ function main() {
     // Only show summary in terminal
     console.log('\nSummary:');
     console.log(`  Total missing static translations: ${totalMissingStatic}`);
-    console.log(`  Total missing transloco pipe keys: ${totalMissingTransloco}`);
+    console.log(`  Missing Transloco Pipe Keys in translation json file: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
     console.log(`\nDetailed report saved to: ${reportFileName}`);
 
@@ -407,7 +417,7 @@ function main() {
     }
     // Print clickable links for missing transloco keys
     if (Object.keys(missingTranslocoKeys).length > 0) {
-      console.log('\nMissing Transloco Pipe Keys (clickable links):');
+      console.log('\nMissing Transloco Pipe Keys in translation json file  (clickable links):');
       for (const key in missingTranslocoKeys) {
         for (const fileLine of missingTranslocoKeys[key]) {
           console.log(`  ${fileLine}  [Key: ${key}]`);
@@ -439,26 +449,20 @@ function main() {
   }
 }
 
-// Helper function to check if text is numeric-only or contains only digits, operators, and spaces
+// Improved isNumericOnly
+// Returns true if the text is a number, math/logic expression, or JS-like expression
+// Used to filter out numbers and expressions from translation key checks
 function isNumericOnly(text: string): boolean {
-  // Remove all whitespace
   const trimmed = text.replace(/\s+/g, '');
-  // Check if the text contains only digits, operators, and common mathematical symbols
-  const numericPattern = /^[\d+\-*/().><=!&\|]+$/;
-  // Also check if it's just multiple digits (like "123", "456", etc.)
-  const onlyDigitsPattern = /^\d+$/;
-  // Check for special characters and symbols that are typically not translated
-  const specialCharPattern = /^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]+$/;
-  // Check for patterns like "---", "___", "***" etc. (improved to catch more variations)
-  const repeatedCharPattern = /^[-_*#=+~`]{2,}$|^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]{2,}$/;
-  // Check for common non-translatable patterns (emails, URLs, etc.)
-  const nonTranslatablePattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^https?:\/\/|^www\.|^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$/;
-  
-  return numericPattern.test(trimmed) || 
-         onlyDigitsPattern.test(trimmed) || 
-         specialCharPattern.test(trimmed) || 
-         repeatedCharPattern.test(trimmed) ||
-         nonTranslatablePattern.test(trimmed);
+  // Pure number (e.g., '123')
+  if (/^\d+$/.test(trimmed)) return true;
+  // Pure expression (e.g., '1+2', '3*4', '5>2')
+  if (/^[\d+\-*/().><=!&|?:]+$/.test(trimmed)) return true;
+  // Ternary or logical expressions (e.g., '1>0?4:5')
+  if (/^\d+[\s><=!&|?:+\-*/().]*\d+$/.test(trimmed)) return true;
+  // JS expression: contains only numbers, operators, spaces, and curly braces
+  if (/^[\d\s+\-*/().><=!&|?:{}]+$/.test(text)) return true;
+  return false;
 }
 
 // Helper function to check if text is an ignorable HTML entity
