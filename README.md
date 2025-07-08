@@ -43,6 +43,9 @@ npx missing-translation@latest ./src ./src/assets/i18n/folderName/en.json ./src/
 ## Output
 - A summary is printed in the terminal.
 - A detailed report file is generated in the project root.
+- Example 
+![image](https://github.com/user-attachments/assets/da6cd594-7ff1-4e61-85b1-abd3d88ffd9e)
+
 
 ## Contributing
 Pull requests and issues are welcome! Please open an issue to discuss your ideas or report bugs.
