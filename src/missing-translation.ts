@@ -2,6 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
+import { exec, execSync } from 'child_process';
 
 interface Result {
   missingKeysEn: Record<string, string[]>;
@@ -269,6 +270,31 @@ const [srcDir, enFile, ...otherFiles] = program.args;
 const options = program.opts();
 const keyPrefix = options.keyPrefix || undefined;
 
+// Auto-detect editor (no env, no CLI param, always fallback to notepad)
+function detectEditor(): string {
+  const editors = [
+    'cursor',
+    'code',
+    'subl',
+    'nvim',
+    'vim',
+    'nano',
+    'vi',
+  ];
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  for (const editor of editors) {
+    try {
+      execSync(`${whichCmd} ${editor}`, { stdio: 'ignore' });
+      return editor;
+    } catch (e) {
+      // Not found, try next
+    }
+  }
+  // Always fallback to notepad
+  return 'notepad';
+}
+const editorCli = detectEditor();
+
 // CLI
 function main() {
   const files = [enFile, ...otherFiles];
@@ -370,6 +396,9 @@ function main() {
     try {
       fs.writeFileSync(fullPath, reportContent, 'utf-8');
       console.log(`\nReport saved successfully to: ${fullPath}`);
+
+      // Open the report file in the detected editor
+      exec(`${editorCli} "${fullPath}"`);
     } catch (error) {
       console.error(`Error saving report: ${error}`);
       // Fallback: try to save in current directory with a simpler name
@@ -377,6 +406,9 @@ function main() {
       try {
         fs.writeFileSync(fallbackFileName, reportContent, 'utf-8');
         console.log(`\nReport saved to fallback location: ${fallbackFileName}`);
+
+        // Open the fallback report file in the detected editor
+        exec(`${editorCli} "${fallbackFileName}"`);
       } catch (fallbackError) {
         console.error(`Failed to save report: ${fallbackError}`);
       }
