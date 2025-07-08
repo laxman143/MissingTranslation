@@ -15,6 +15,14 @@
   "author": "Your Name",
   "license": "ISC",
   "description": "CLI tool to find missing translation keys in HTML and JSON files.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/laxman143/MissingTranslation.git"
+  },
+  "bugs": {
+    "url": "https://github.com/laxman143/MissingTranslation/issues"
+  },
+  "homepage": "https://github.com/laxman143/MissingTranslation#readme",
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
