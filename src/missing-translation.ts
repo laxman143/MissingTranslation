@@ -18,6 +18,7 @@ interface Result {
 // Helper function to flatten nested objects into dot-separated keys and track object keys
 function flattenObject(obj: any, prefix = '', objectKeys = new Set<string>()): { flat: Record<string, any>, objectKeys: Set<string> } {
   let result: Record<string, any> = {};
+  console.log("test")
   for (const key in obj) {
     if (!obj.hasOwnProperty(key)) continue;
     const value = obj[key];
