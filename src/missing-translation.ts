@@ -397,8 +397,10 @@ function main() {
       fs.writeFileSync(fullPath, reportContent, 'utf-8');
       console.log(`\nReport saved successfully to: ${fullPath}`);
 
+      if (!process.env.CI) {
       // Open the report file in the detected editor
-      exec(`${editorCli} "${fullPath}"`);
+        exec(`${editorCli} "${fullPath}"`);
+      }
     } catch (error) {
       console.error(`Error saving report: ${error}`);
       // Fallback: try to save in current directory with a simpler name
@@ -406,9 +408,10 @@ function main() {
       try {
         fs.writeFileSync(fallbackFileName, reportContent, 'utf-8');
         console.log(`\nReport saved to fallback location: ${fallbackFileName}`);
-
+        if (!process.env.CI) {
         // Open the fallback report file in the detected editor
-        exec(`${editorCli} "${fallbackFileName}"`);
+          exec(`${editorCli} "${fallbackFileName}"`);
+        }
       } catch (fallbackError) {
         console.error(`Failed to save report: ${fallbackError}`);
       }
