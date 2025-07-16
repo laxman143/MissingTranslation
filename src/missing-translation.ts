@@ -319,13 +319,13 @@ function main() {
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
-    
+
     const timestamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
     const reportFileName = `missing-translations-report-${timestamp}.txt`;
-    
+
     let reportContent = 'MISSING TRANSLATIONS REPORT\n';
     reportContent += '==========================\n\n';
-    
+
     // Combine missing top-level objects and missing keys into a single summary section
     if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
       reportContent += '\n\nMISSING TRANSLATION STRUCTURE (compared to source json file like en.json):\n';
@@ -352,7 +352,7 @@ function main() {
     } else {
       reportContent += '\nNo missing top-level objects or keys found compared to en.json.\n';
     }
-    
+
     // Report missing static translations
     if (Object.keys(missingTranslationsHtml).length > 0) {
       reportContent += '\n\nMISSING STATIC TRANSLATIONS IN HTML FILES:\n';
@@ -366,7 +366,7 @@ function main() {
     } else {
       reportContent += '\nNo missing static translations found in HTML files.\n';
     }
-    
+
     // Report missing transloco keys
     if (Object.keys(missingTranslocoKeys).length > 0) {
       reportContent += '\n\nMISSING TRANLOCO PIPE KEYS:\n';
@@ -380,7 +380,7 @@ function main() {
     } else {
       reportContent += '\nNo missing transloco pipe keys found in HTML files.\n';
     }
-    
+
     // Add summary to report
     reportContent += '\n\nSUMMARY:\n';
     reportContent += '========\n';
@@ -388,17 +388,17 @@ function main() {
     reportContent += `Total missing transloco pipe keys in translation json file: ${totalMissingTransloco}\n`;
     reportContent += `Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}\n`;
     reportContent += `\nReport generated on: ${new Date().toLocaleString()}\n`;
-    
+
     // Save report to file
     const currentDir = process.cwd();
     const fullPath = path.join(currentDir, reportFileName);
-    
+
     try {
       fs.writeFileSync(fullPath, reportContent, 'utf-8');
       console.log(`\nReport saved successfully to: ${fullPath}`);
 
       if (!process.env.CI) {
-      // Open the report file in the detected editor
+        // Open the report file in the detected editor
         exec(`${editorCli} "${fullPath}"`);
       }
     } catch (error) {
@@ -409,16 +409,16 @@ function main() {
         fs.writeFileSync(fallbackFileName, reportContent, 'utf-8');
         console.log(`\nReport saved to fallback location: ${fallbackFileName}`);
         if (!process.env.CI) {
-        // Open the fallback report file in the detected editor
+          // Open the fallback report file in the detected editor
           exec(`${editorCli} "${fallbackFileName}"`);
         }
       } catch (fallbackError) {
         console.error(`Failed to save report: ${fallbackError}`);
       }
     }
-    
+
     // Only show summary in terminal
-    console.log('\nSummary 13:');
+    console.log('\nSummary:');
     console.log(`  Total missing static translations: ${totalMissingStatic}`);
     console.log(`  Missing Transloco Pipe Keys in translation json file: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
@@ -469,7 +469,7 @@ function main() {
         }
       }
     }
-    
+
     // List all report files in current directory
     try {
       const files = fs.readdirSync(currentDir);
@@ -485,11 +485,27 @@ function main() {
     } catch (listError) {
       console.log('\nCould not list report files in directory');
     }
-    
-    console.log('Script completed successfully. Exit code: 0');
+
+    //console.log('Script completed successfully. Exit code: 0');
+    console.log('Script completed successfully');
+    if (!process.env.CI) {
+      if (
+        totalMissingStatic > 0 ||
+        totalMissingTransloco > 0 ||
+        totalMissingKeysEn > 0
+      ) {
+        console.log('\n❌ Missing translations detected. Failing pipeline...');
+        process.exit(1);
+      } else {
+        console.log('\n✅ No missing translations. Pipeline succeeded.');
+        process.exit(0);
+      }
+    }
+
+
   } catch (e: any) {
     console.error(`An error occurred: ${e.message}`);
-    console.log('Script failed. Exit code: 1');
+    console.log('Script failed.');
     process.exit(1);
   }
 }
