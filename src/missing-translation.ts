@@ -394,10 +394,10 @@ function main() {
     const fullPath = path.join(currentDir, reportFileName);
 
     try {
+      if (!process.env.CI) {
       fs.writeFileSync(fullPath, reportContent, 'utf-8');
       console.log(`\nReport saved successfully to: ${fullPath}`);
-
-      if (!process.env.CI) {
+      
         // Open the report file in the detected editor
         exec(`${editorCli} "${fullPath}"`);
       }
@@ -471,7 +471,7 @@ function main() {
     }
 
     // List all report files in current directory
-    try {
+   /*  try {
       const files = fs.readdirSync(currentDir);
       const reportFiles = files.filter(file => file.startsWith('missing-translations-report'));
       if (reportFiles.length > 0) {
@@ -484,7 +484,7 @@ function main() {
       }
     } catch (listError) {
       console.log('\nCould not list report files in directory');
-    }
+    } */
 
     //console.log('Script completed successfully. Exit code: 0');
     console.log('Script completed successfully');
