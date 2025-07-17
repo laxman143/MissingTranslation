@@ -270,6 +270,19 @@ const [srcDir, enFile, ...otherFiles] = program.args;
 const options = program.opts();
 const keyPrefix = options.keyPrefix || undefined;
 
+// Automatically find all translation files in the same directory as enFile if otherFiles is empty
+let files: string[];
+if (otherFiles.length === 0) {
+  const enDir = path.dirname(enFile);
+  const allJsonFiles = fs.readdirSync(enDir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => path.join(enDir, f));
+  // Exclude enFile itself from the list of other files
+  files = [enFile, ...allJsonFiles.filter(f => path.resolve(f) !== path.resolve(enFile))];
+} else {
+  files = [enFile, ...otherFiles];
+}
+
 // Auto-detect editor (no env, no CLI param, always fallback to notepad)
 function detectEditor(): string {
   const editors = [
@@ -297,7 +310,6 @@ const editorCli = detectEditor();
 
 // CLI
 function main() {
-  const files = [enFile, ...otherFiles];
   try {
     const result = findMissingTranslations(srcDir, files, enFile, keyPrefix);
     const {
