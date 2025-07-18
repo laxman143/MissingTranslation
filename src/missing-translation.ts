@@ -270,6 +270,19 @@ const [srcDir, enFile, ...otherFiles] = program.args;
 const options = program.opts();
 const keyPrefix = options.keyPrefix || undefined;
 
+// Automatically find all translation files in the same directory as enFile if otherFiles is empty
+let files: string[];
+if (otherFiles.length === 0) {
+  const enDir = path.dirname(enFile);
+  const allJsonFiles = fs.readdirSync(enDir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => path.join(enDir, f));
+  // Exclude enFile itself from the list of other files
+  files = [enFile, ...allJsonFiles.filter(f => path.resolve(f) !== path.resolve(enFile))];
+} else {
+  files = [enFile, ...otherFiles];
+}
+
 // Auto-detect editor (no env, no CLI param, always fallback to notepad)
 function detectEditor(): string {
   const editors = [
@@ -296,8 +309,7 @@ function detectEditor(): string {
 const editorCli = detectEditor();
 
 // CLI
-function main() {
-  const files = [enFile, ...otherFiles];
+function main(): number {
   try {
     const result = findMissingTranslations(srcDir, files, enFile, keyPrefix);
     const {
@@ -489,25 +501,23 @@ function main() {
 
     //console.log('Script completed successfully. Exit code: 0');
     console.log('Script completed successfully');
-    if (!process.env.CI) {
-      if (
-        totalMissingStatic > 0 ||
-        totalMissingTransloco > 0 ||
-        totalMissingKeysEn > 0
-      ) {
-        console.log('\n❌ Missing translations detected. Failing pipeline...');
-        process.exit(1);
-      } else {
-        console.log('\n✅ No missing translations. Pipeline succeeded.');
-        process.exit(0);
-      }
+    if (
+      totalMissingStatic > 0 ||
+      totalMissingTransloco > 0 ||
+      totalMissingKeysEn > 0
+    ) {
+      console.log('\n❌ Missing translations detected. Failing pipeline...');
+      return 1;
+    } else {
+      console.log('\n✅ No missing translations. Pipeline succeeded.');
+      return 0;
     }
 
 
   } catch (e: any) {
     console.error(`An error occurred: ${e.message}`);
     console.log('Script failed.');
-    process.exit(1);
+    return 1;
   }
 }
 
@@ -546,5 +556,6 @@ function keyExists(key: string, keySet: Set<string>, prefix?: string): boolean {
 }
 
 if (require.main === module) {
-  main();
+  const exitCode = main();
+  process.exit(exitCode);
 }
