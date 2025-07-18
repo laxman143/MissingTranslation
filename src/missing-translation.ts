@@ -435,7 +435,9 @@ function main(): number {
     console.log(`  Total missing static translations: ${totalMissingStatic}`);
     console.log(`  Missing Transloco Pipe Keys in translation json file: ${totalMissingTransloco}`);
     console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
-    console.log(`\nDetailed report saved to: ${reportFileName}`);
+    if (!process.env.CI) {
+      console.log(`\nDetailed report saved to: ${reportFileName}`);
+    }
 
     // Print the same grouped summary for missing top-level objects and missing keys as in the report
     if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
