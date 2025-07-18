@@ -309,7 +309,7 @@ function detectEditor(): string {
 const editorCli = detectEditor();
 
 // CLI
-function main() {
+function main(): number {
   try {
     const result = findMissingTranslations(srcDir, files, enFile, keyPrefix);
     const {
@@ -501,25 +501,23 @@ function main() {
 
     //console.log('Script completed successfully. Exit code: 0');
     console.log('Script completed successfully');
-    if (!process.env.CI) {
-      if (
-        totalMissingStatic > 0 ||
-        totalMissingTransloco > 0 ||
-        totalMissingKeysEn > 0
-      ) {
-        console.log('\n❌ Missing translations detected. Failing pipeline...');
-        process.exit(1);
-      } else {
-        console.log('\n✅ No missing translations. Pipeline succeeded.');
-        process.exit(0);
-      }
+    if (
+      totalMissingStatic > 0 ||
+      totalMissingTransloco > 0 ||
+      totalMissingKeysEn > 0
+    ) {
+      console.log('\n❌ Missing translations detected. Failing pipeline...');
+      return 1;
+    } else {
+      console.log('\n✅ No missing translations. Pipeline succeeded.');
+      return 0;
     }
 
 
   } catch (e: any) {
     console.error(`An error occurred: ${e.message}`);
     console.log('Script failed.');
-    process.exit(1);
+    return 1;
   }
 }
 
@@ -558,5 +556,6 @@ function keyExists(key: string, keySet: Set<string>, prefix?: string): boolean {
 }
 
 if (require.main === module) {
-  main();
+  const exitCode = main();
+  process.exit(exitCode);
 }
