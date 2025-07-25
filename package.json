@@ -1,6 +1,6 @@
 {
   "name": "missing-translation",
-  "version": "1.13.0",
+  "version": "2.0.0",
   "main": "dist/missing-translation.js",
   "bin": {
     "missing-translation": "dist/missing-translation.js"

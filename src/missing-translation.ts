@@ -34,11 +34,28 @@ function flattenObject(obj: any, prefix = '', objectKeys = new Set<string>()): {
   return { flat: result, objectKeys };
 }
 
+// Move walk function to top-level so it can be used in findMissingTranslations
+function walk(dir: string, callback: (filePath: string) => void, excludeDirs: string[] = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    // If this directory is in the exclude list, skip it
+    if (entry.isDirectory() && excludeDirs.includes(path.resolve(fullPath))) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      walk(fullPath, callback, excludeDirs);
+    } else if (entry.isFile()) {
+      callback(fullPath);
+    }
+  }
+}
+
 function findMissingTranslations(
   rootDir: string,
   translationFiles: string[],
   enFile: string,
-  keyPrefix?: string
+  keyPrefix?: string,
+  excludeDirs: string[] = []
 ): Result {
   // Part 1: Find missing keys compared to en.json (excluding object-like keys)
   let enTranslations: Record<string, any> = {};
@@ -141,24 +158,27 @@ function findMissingTranslations(
   let totalMissingStatic = 0;
   let totalMissingTransloco = 0;
 
-  function walk(dir: string, callback: (filePath: string) => void) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath, callback);
-      } else if (entry.isFile()) {
-        callback(fullPath);
-      }
-    }
-  }
-
   // Helper to strip quotes from a key
   // Removes leading and trailing single or double quotes from a string
   function stripQuotes(key: string): string {
     return key.replace(/^['"]|['"]$/g, '');
   }
 
-  walk(rootDir, (filepath) => {
+  // Generalized function to ignore Angular control flow and template syntax
+  function isTemplateControlFlow(text: string): boolean {
+    const trimmed = text.trim();
+    // Ignore lines that start with @ and end with {
+    if (/^@.*\{$/.test(trimmed)) return true;
+    // Ignore lines that are just }
+    if (trimmed === '}') return true;
+    // Ignore lines that start with } and then @...{
+    if (/^}\s*@.*\{$/.test(trimmed)) return true;
+    // Ignore lines that are just symbols, whitespace, or braces
+    if (/^[\s{}()=><!&|?:;.,'"\[\]-]*$/.test(trimmed)) return true;
+    return false;
+  }
+
+  walk(rootDir, (filepath: string) => {
     if (filepath.endsWith('.html') && !filepath.endsWith('index.html')) {
       let content: string;
       try {
@@ -178,31 +198,63 @@ function findMissingTranslations(
       const staticTextOccurrences: { key: string, line: number }[] = [];
       const translocoKeyOccurrences: { key: string, line: number }[] = [];
 
-      // --- Static text extraction ---
-      // For each line, extract visible static text between > and <
-      // Ignore if it contains Angular expressions ({{ ... }}) or is numeric/expression
+      // --- Robust static text and translation key extraction between tags ---
+      let insideTag = false;
+      let buffer = '';
+      let bufferStartLine = 0;
       lines.forEach((line, idx) => {
-        // For each match of static text between > and <
-        Array.from(line.matchAll(/>([^<>{{\[]*?)</g)).forEach(m => {
-          let key = m[1].trim();
-          key = stripQuotes(key);
-          // Ignore if the static text contains Angular expressions
-          if (key.includes('{{') || key.includes('}}')) return;
-          // Ignore if the static text is a number, logic, or JS-like expression
-          if (key && !isNumericOnly(key) && !isIgnorableHtmlEntity(key)) {
-            staticTextOccurrences.push({ key, line: idx + 1 });
+        let i = 0;
+        while (i < line.length) {
+          if (!insideTag && line[i] === '>') {
+            insideTag = true;
+            buffer = '';
+            bufferStartLine = idx;
+            i++;
+            continue;
           }
-        });
-        // --- Transloco key extraction ---
-        // For each match of a transloco key in the form {{ 'key' | transloco }} or {{ "key" | transloco }}
-        Array.from(line.matchAll(/{{\s*['"]([^'\"]+)['"]\s*\|\s*transloco\s*}}/g)).forEach(m => {
-          let key = m[1].trim();
-          key = stripQuotes(key);
-          // Ignore if the key is a number, logic, or JS-like expression
-          if (key && !isNumericOnly(key)) {
-            translocoKeyOccurrences.push({ key, line: idx + 1 });
+          if (insideTag && line[i] === '<') {
+            // Process buffer
+            const content = buffer.trim();
+            // Only process if content contains at least one alphanumeric character and does not look like an attribute fragment
+            if (
+              content &&
+              /[a-zA-Z0-9]/.test(content) && // must contain at least one letter or number
+              !/^=/.test(content) && // does not start with '='
+              !/>$/.test(content) && // does not end with '>'
+              !/^([=><!{}\[\]"'\s:.()-]|d-none)+$/.test(content) // not just symbols/attribute syntax
+            ) {
+              // Check for transloco pipe (even across lines)
+              const translocoMatch = content.match(/{{\s*['"]([^'\"]+)['"]\s*\|\s*transloco\s*}}/s);
+              if (translocoMatch) {
+                // Extract key and record as transloco key
+                const key = translocoMatch[1].trim();
+                translocoKeyOccurrences.push({ key, line: bufferStartLine + 1 });
+              } else if (/{{.*}}/.test(content)) {
+                // Ignore variable-only interpolation
+              } else {
+                // Treat as static text
+                let key = content;
+                key = stripQuotes(key);
+                if (
+                  key &&
+                  !isNumericOnly(key) &&
+                  !isIgnorableHtmlEntity(key) &&
+                  !isTemplateControlFlow(key) // <-- Use the new function
+                ) {
+                  staticTextOccurrences.push({ key, line: bufferStartLine + 1 });
+                }
+              }
+            }
+            buffer = '';
+            insideTag = false;
+            i++;
+            continue;
           }
-        });
+          if (insideTag) {
+            buffer += line[i];
+          }
+          i++;
+        }
       });
 
       // Check missing static text
@@ -243,7 +295,7 @@ function findMissingTranslations(
         }
       }
     }
-  });
+  }, excludeDirs);
 
   return {
     missingKeysEn,
@@ -260,28 +312,38 @@ function findMissingTranslations(
 // CLI setup
 const program = new Command();
 program
-  .argument('<srcDir>', 'Source directory to scan for translation keys')
-  .argument('<enFile>', 'Source translation file (e.g., en.json)')
-  .argument('[otherFiles...]', 'Other translation files to compare')
+  .argument('<args...>', 'Groups of <srcDir> <enFile> [otherFiles...] for each feature')
   .option('--key-prefix <prefix>', 'Optional prefix to strip from translation keys')
   .parse(process.argv);
 
-const [srcDir, enFile, ...otherFiles] = program.args;
-const options = program.opts();
-const keyPrefix = options.keyPrefix || undefined;
-
-// Automatically find all translation files in the same directory as enFile if otherFiles is empty
-let files: string[];
-if (otherFiles.length === 0) {
-  const enDir = path.dirname(enFile);
-  const allJsonFiles = fs.readdirSync(enDir)
-    .filter(f => f.endsWith('.json'))
-    .map(f => path.join(enDir, f));
-  // Exclude enFile itself from the list of other files
-  files = [enFile, ...allJsonFiles.filter(f => path.resolve(f) !== path.resolve(enFile))];
-} else {
-  files = [enFile, ...otherFiles];
+// Updated argument parsing for multiple groups with optional --key-prefix
+const args = process.argv.slice(2);
+interface Group {
+  srcDir: string;
+  i18nFile: string;
+  keyPrefix?: string;
 }
+const groups: Group[] = [];
+let i = 0;
+while (i < args.length) {
+  const srcDir = args[i];
+  const i18nFile = args[i + 1];
+  let keyPrefix: string | undefined = undefined;
+  let next = i + 2;
+  if (args[next] === '--key-prefix') {
+    keyPrefix = args[next + 1];
+    next += 2;
+  }
+  if (!srcDir || !i18nFile) {
+    console.error('Error: Each group must have at least <srcDir> and <i18nFile>');
+    process.exit(1);
+  }
+  groups.push({ srcDir, i18nFile, keyPrefix });
+  i = next;
+}
+
+// Collect all group paths (absolute)
+const allGroupPaths = groups.map(g => path.resolve(g.srcDir));
 
 // Auto-detect editor (no env, no CLI param, always fallback to notepad)
 function detectEditor(): string {
@@ -308,217 +370,185 @@ function detectEditor(): string {
 }
 const editorCli = detectEditor();
 
-// CLI
+// Main logic: process each group
 function main(): number {
-  try {
-    const result = findMissingTranslations(srcDir, files, enFile, keyPrefix);
-    const {
-      missingKeysEn,
-      missingTranslationsHtml,
-      missingTranslocoKeys,
-      totalMissingStatic,
-      totalMissingTransloco,
-      totalMissingKeysEn,
-      objectKeyMismatches,
-      missingTopLevelObjects,
-    } = result;
+  let overallExitCode = 0;
+  let globalReportContent = '';
+  let groupSummaries: string[] = [];
+  let globalTotalMissingStatic = 0;
+  let globalTotalMissingTransloco = 0;
+  let globalTotalMissingKeysEn = 0;
 
-    // Generate detailed report
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-
-    const timestamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
-    const reportFileName = `missing-translations-report-${timestamp}.txt`;
-
-    let reportContent = 'MISSING TRANSLATIONS REPORT\n';
-    reportContent += '==========================\n\n';
-
-    // Combine missing top-level objects and missing keys into a single summary section
-    if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
-      reportContent += '\n\nMISSING TRANSLATION STRUCTURE (compared to source json file like en.json):\n';
-      reportContent += '====================================================\n';
-      const allFiles = new Set([
-        ...Object.keys(missingTopLevelObjects),
-        ...Object.keys(missingKeysEn)
-      ]);
-      for (const file of allFiles) {
-        reportContent += `\n${file}:\n`;
-        if (missingTopLevelObjects[file] && missingTopLevelObjects[file].length > 0) {
-          reportContent += '  Missing top-level objects:\n';
-          for (const key of missingTopLevelObjects[file]) {
-            reportContent += `    - ${key}\n`;
-          }
-        }
-        if (missingKeysEn[file] && missingKeysEn[file].length > 0) {
-          reportContent += '  Missing keys:\n';
-          for (const key of missingKeysEn[file]) {
-            reportContent += `    - ${key}\n`;
-          }
-        }
-      }
-    } else {
-      reportContent += '\nNo missing top-level objects or keys found compared to en.json.\n';
+  for (let groupIdx = 0; groupIdx < groups.length; groupIdx++) {
+    const { srcDir, i18nFile, keyPrefix } = groups[groupIdx];
+    // Exclude all other group paths that are subdirectories of this srcDir
+    const excludeDirs = allGroupPaths
+      .filter(p => p !== path.resolve(srcDir) && p.startsWith(path.resolve(srcDir) + path.sep));
+    // Determine files to compare (all JSONs in the i18nFile's directory)
+    const enDir = path.dirname(i18nFile);
+    const allJsonFiles = fs.readdirSync(enDir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => path.join(enDir, f));
+    const files = [i18nFile, ...allJsonFiles.filter(f => path.resolve(f) !== path.resolve(i18nFile))];
+    const groupNumber = groupIdx + 1;
+    let reportContent = '';
+    reportContent += `\n==== GROUP ${groupNumber}: ${srcDir} ====`;
+    reportContent += `\ni18nFile: ${i18nFile}`;
+    reportContent += `\nkeyPrefix: ${keyPrefix ?? '(none)'}`;
+    reportContent += `\nCompared files:\n`;
+    for (const f of files) {
+      reportContent += `  - ${f}\n`;
     }
-
-    // Report missing static translations
-    if (Object.keys(missingTranslationsHtml).length > 0) {
-      reportContent += '\n\nMISSING STATIC TRANSLATIONS IN HTML FILES:\n';
-      reportContent += '===========================================\n';
-      for (const key in missingTranslationsHtml) {
-        reportContent += `\nKey: ${key}\n`;
-        for (const file of missingTranslationsHtml[key]) {
-          reportContent += `  - ${file}\n`;
-        }
-      }
-    } else {
-      reportContent += '\nNo missing static translations found in HTML files.\n';
-    }
-
-    // Report missing transloco keys
-    if (Object.keys(missingTranslocoKeys).length > 0) {
-      reportContent += '\n\nMISSING TRANLOCO PIPE KEYS:\n';
-      reportContent += '===========================\n';
-      for (const key in missingTranslocoKeys) {
-        reportContent += `\nKey: ${key}\n`;
-        for (const file of missingTranslocoKeys[key]) {
-          reportContent += `  - ${file}\n`;
-        }
-      }
-    } else {
-      reportContent += '\nNo missing transloco pipe keys found in HTML files.\n';
-    }
-
-    // Add summary to report
-    reportContent += '\n\nSUMMARY:\n';
-    reportContent += '========\n';
-    reportContent += `Total missing static translations: ${totalMissingStatic}\n`;
-    reportContent += `Total missing transloco pipe keys in translation json file: ${totalMissingTransloco}\n`;
-    reportContent += `Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}\n`;
-    reportContent += `\nReport generated on: ${new Date().toLocaleString()}\n`;
-
-    // Save report to file
-    const currentDir = process.cwd();
-    const fullPath = path.join(currentDir, reportFileName);
-
     try {
-     if (!process.env.CI) {
-      fs.writeFileSync(fullPath, reportContent, 'utf-8');
-      console.log(`\nReport saved successfully to: ${fullPath}`);
+      const result = findMissingTranslations(srcDir, files, i18nFile, keyPrefix, excludeDirs);
+      const {
+        missingKeysEn,
+        missingTranslationsHtml,
+        missingTranslocoKeys,
+        totalMissingStatic,
+        totalMissingTransloco,
+        totalMissingKeysEn,
+        objectKeyMismatches,
+        missingTopLevelObjects,
+      } = result;
 
-      
-        // Open the report file in the detected editor
-        exec(`${editorCli} "${fullPath}"`);
-      }
-    } catch (error) {
-      console.error(`Error saving report: ${error}`);
-      // Fallback: try to save in current directory with a simpler name
-      const fallbackFileName = `missing-translations-report.txt`;
-      try {
-        fs.writeFileSync(fallbackFileName, reportContent, 'utf-8');
-        console.log(`\nReport saved to fallback location: ${fallbackFileName}`);
-        if (!process.env.CI) {
-          // Open the fallback report file in the detected editor
-          exec(`${editorCli} "${fallbackFileName}"`);
-        }
-      } catch (fallbackError) {
-        console.error(`Failed to save report: ${fallbackError}`);
-      }
-    }
-
-    // Only show summary in terminal
-    console.log('\nSummary:');
-    console.log(`  Total missing static translations: ${totalMissingStatic}`);
-    console.log(`  Missing Transloco Pipe Keys in translation json file: ${totalMissingTransloco}`);
-    console.log(`  Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}`);
-    console.log(`\nDetailed report saved to: ${reportFileName}`);
-
-    // Print the same grouped summary for missing top-level objects and missing keys as in the report
-    if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
-      console.log('\nMISSING TRANSLATION STRUCTURE (compared to en.json):');
-      console.log('====================================================');
-      const allFiles = new Set([
-        ...Object.keys(missingTopLevelObjects),
-        ...Object.keys(missingKeysEn)
-      ]);
-      for (const file of allFiles) {
-        console.log(`\n${file}:`);
-        if (missingTopLevelObjects[file] && missingTopLevelObjects[file].length > 0) {
-          console.log('  Missing top-level objects:');
-          for (const key of missingTopLevelObjects[file]) {
-            console.log(`    - ${key}`);
+      // Section: Missing top-level objects and keys
+      if (Object.keys(missingTopLevelObjects).length > 0 || Object.keys(missingKeysEn).length > 0) {
+        reportContent += '\n\n---- MISSING TRANSLATION STRUCTURE ----\n';
+        const allFiles = new Set([
+          ...Object.keys(missingTopLevelObjects),
+          ...Object.keys(missingKeysEn)
+        ]);
+        for (const file of allFiles) {
+          reportContent += `\n${file}:\n`;
+          if (missingTopLevelObjects[file] && missingTopLevelObjects[file].length > 0) {
+            reportContent += '  Missing top-level objects:\n';
+            for (const key of missingTopLevelObjects[file]) {
+              reportContent += `    - ${key}\n`;
+            }
+          }
+          if (missingKeysEn[file] && missingKeysEn[file].length > 0) {
+            reportContent += '  Missing keys:\n';
+            for (const key of missingKeysEn[file]) {
+              reportContent += `    - ${key}\n`;
+            }
           }
         }
-        if (missingKeysEn[file] && missingKeysEn[file].length > 0) {
-          console.log('  Missing keys:');
-          for (const key of missingKeysEn[file]) {
-            console.log(`    - ${key}`);
+      } else {
+        reportContent += '\nNo missing top-level objects or keys found compared to en.json.\n';
+      }
+
+      // Section: Static translations
+      reportContent += '\n---- STATIC TRANSLATIONS ----\n';
+      if (Object.keys(missingTranslationsHtml).length > 0) {
+        for (const key in missingTranslationsHtml) {
+          reportContent += `\nKey: ${key}\n`;
+          for (const file of missingTranslationsHtml[key]) {
+            reportContent += `  - ${file}\n`;
           }
         }
+      } else {
+        reportContent += '\nNo missing static translations found in HTML files.\n';
       }
-    } else {
-      console.log('\nNo missing top-level objects or keys found compared to en.json.');
-    }
 
-    // Print clickable links for missing static translations
-    if (Object.keys(missingTranslationsHtml).length > 0) {
-      console.log('\nMissing Static Translations (clickable links):');
-      for (const key in missingTranslationsHtml) {
-        for (const fileLine of missingTranslationsHtml[key]) {
-          console.log(`  ${fileLine}  [Key: ${key}]`);
+      // Section: Transloco pipe keys
+      reportContent += '\n**** TRANLOCO PIPE KEYS ****\n';
+      if (Object.keys(missingTranslocoKeys).length > 0) {
+        for (const key in missingTranslocoKeys) {
+          reportContent += `\nKey: ${key}\n`;
+          for (const file of missingTranslocoKeys[key]) {
+            reportContent += `  - ${file}\n`;
+          }
         }
+      } else {
+        reportContent += '\nNo missing transloco pipe keys found in HTML files.\n';
       }
-    }
-    // Print clickable links for missing transloco keys
-    if (Object.keys(missingTranslocoKeys).length > 0) {
-      console.log('\nMissing Transloco Pipe Keys in translation json file  (clickable links):');
-      for (const key in missingTranslocoKeys) {
-        for (const fileLine of missingTranslocoKeys[key]) {
-          console.log(`  ${fileLine}  [Key: ${key}]`);
-        }
+
+      // Section: Summary
+      reportContent += '\n>>>> SUMMARY <<<<\n';
+      reportContent += `Total missing static translations: ${totalMissingStatic}\n`;
+      reportContent += `Total missing transloco pipe keys in translation json file: ${totalMissingTransloco}\n`;
+      reportContent += `Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}\n`;
+      reportContent += `\nGroup report generated on: ${new Date().toLocaleString()}\n`;
+
+      // Add to global report
+      globalReportContent += reportContent;
+      groupSummaries.push(`Group ${groupNumber}: ${srcDir}\n  Static: ${totalMissingStatic}, Pipe: ${totalMissingTransloco}, Keys: ${totalMissingKeysEn}`);
+      globalTotalMissingStatic += totalMissingStatic;
+      globalTotalMissingTransloco += totalMissingTransloco;
+      globalTotalMissingKeysEn += totalMissingKeysEn;
+
+      if (
+        totalMissingStatic > 0 ||
+        totalMissingTransloco > 0 ||
+        totalMissingKeysEn > 0
+      ) {
+        overallExitCode = 1;
       }
+    } catch (e: any) {
+      reportContent += `\n\nERROR: ${e.message}\n`;
+      overallExitCode = 1;
+      globalReportContent += reportContent;
     }
-
-   /*  // List all report files in current directory
-    try {
-      const files = fs.readdirSync(currentDir);
-      const reportFiles = files.filter(file => file.startsWith('missing-translations-report'));
-      if (reportFiles.length > 0) {
-        console.log('\nAvailable report files in current directory:');
-        reportFiles.forEach(file => {
-          const filePath = path.join(currentDir, file);
-          const stats = fs.statSync(filePath);
-          console.log(`  - ${file} (${stats.size} bytes, created: ${stats.mtime.toLocaleString()})`);
-        });
-      }
-    } catch (listError) {
-      console.log('\nCould not list report files in directory');
-    } */
-
-    //console.log('Script completed successfully. Exit code: 0');
-    console.log('Script completed successfully');
-    if (
-      totalMissingStatic > 0 ||
-      totalMissingTransloco > 0 ||
-      totalMissingKeysEn > 0
-    ) {
-      console.log('\n❌ Missing translations detected. Failing pipeline...');
-      return 1;
-    } else {
-      console.log('\n✅ No missing translations. Pipeline succeeded.');
-      return 0;
-    }
-
-
-  } catch (e: any) {
-    console.error(`An error occurred: ${e.message}`);
-    console.log('Script failed.');
-    return 1;
   }
+
+  // Add global summary only if more than one group
+  let finalReport = '';
+  if (groups.length > 1) {
+    finalReport = 'MISSING TRANSLATIONS REPORT (ALL GROUPS)\n';
+    finalReport += '========================================\n';
+    finalReport += globalReportContent;
+    finalReport += '\n\nGLOBAL SUMMARY:\n===============\n';
+    for (const summary of groupSummaries) {
+      finalReport += summary + '\n';
+    }
+    finalReport += '\nTOTALS ACROSS ALL GROUPS:\n';
+    finalReport += `  Total missing static translations: ${globalTotalMissingStatic}\n`;
+    finalReport += `  Total missing transloco pipe keys in translation json file: ${globalTotalMissingTransloco}\n`;
+    finalReport += `  Total missing keys in other translation files compared to en.json: ${globalTotalMissingKeysEn}\n`;
+    finalReport += `\nReport generated on: ${new Date().toLocaleString()}\n`;
+  } else {
+    finalReport = globalReportContent;
+  }
+
+  // Save report to file (same as before)
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  const timestamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+  const reportFileName = `missing-translations-report-${timestamp}.txt`;
+  const currentDir = process.cwd();
+  const fullPath = path.join(currentDir, reportFileName);
+  try {
+    fs.writeFileSync(fullPath, finalReport, 'utf-8');
+    console.log(`\nReport saved successfully to: ${fullPath}`);
+    if (!process.env.CI && process.stdout.isTTY) {
+      exec(`${editorCli} "${fullPath}"`);
+    }
+  } catch (error) {
+    console.error(`Error saving report: ${error}`);
+    // Fallback: try to save in current directory with a simpler name
+    const fallbackFileName = `missing-translations-report.txt`;
+    try {
+      fs.writeFileSync(fallbackFileName, finalReport, 'utf-8');
+      console.log(`\nReport saved to fallback location: ${fallbackFileName}`);
+      if (!process.env.CI && process.stdout.isTTY) {
+        exec(`${editorCli} "${fallbackFileName}"`);
+      }
+    } catch (fallbackError) {
+      console.error(`Failed to save report: ${fallbackError}`);
+    }
+  }
+
+  // Print the same detailed report in the terminal
+  console.log('\n===== FULL REPORT =====\n');
+  console.log(finalReport);
+
+  return overallExitCode;
 }
 
 // Improved isNumericOnly
