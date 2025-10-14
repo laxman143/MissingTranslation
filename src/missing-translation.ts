@@ -55,6 +55,7 @@ function findMissingTranslations(
   translationFiles: string[],
   enFile: string,
   keyPrefix?: string,
+  pipeName: string = 'transloco',
   excludeDirs: string[] = []
 ): Result {
   // Part 1: Find missing keys compared to en.json (excluding object-like keys)
@@ -223,11 +224,12 @@ function findMissingTranslations(
               !/>$/.test(content) && // does not end with '>'
               !/^([=><!{}\[\]"'\s:.()-]|d-none)+$/.test(content) // not just symbols/attribute syntax
             ) {
-              // Check for transloco pipe (even across lines)
-              const translocoMatch = content.match(/{{\s*['"]([^'\"]+)['"]\s*\|\s*transloco\s*}}/s);
-              if (translocoMatch) {
-                // Extract key and record as transloco key
-                const key = translocoMatch[1].trim();
+              // Check for translation pipe (dynamic pipe name)
+              const pipeRegex = new RegExp(`{{\\s*['"]([^'"]+)['"]\\s*\\|\\s*${pipeName}\\s*}}`, 's');
+              const pipeMatch = pipeRegex.exec(content);
+              if (pipeMatch) {
+                // Extract key and record as translation pipe key
+                const key = pipeMatch[1].trim();
                 translocoKeyOccurrences.push({ key, line: bufferStartLine + 1 });
               } else if (/{{.*}}/.test(content)) {
                 // Ignore variable-only interpolation
@@ -312,33 +314,103 @@ function findMissingTranslations(
 // CLI setup
 const program = new Command();
 program
-  .argument('<args...>', 'Groups of <srcDir> <enFile> [otherFiles...] for each feature')
+  .argument('<args...>', 'Groups of <srcDir> <enFile> [otherFiles...] for each feature. <enFile> can be: filename (e.g., "en.json"), relative path (e.g., "./i18n/en.json"), or absolute path')
   .option('--key-prefix <prefix>', 'Optional prefix to strip from translation keys')
+  .option('--pipe-name <name>', 'Name of the translation pipe to look for (default: "transloco")', 'transloco')
   .parse(process.argv);
 
-// Updated argument parsing for multiple groups with optional --key-prefix
+// Helper function to find i18n file in directory tree
+function findI18nFile(srcDir: string, fileName: string): string {
+  // Check if it's an absolute path
+  if (path.isAbsolute(fileName)) {
+    return fileName;
+  }
+  
+  // Check if it's a relative path (contains path separators)
+  if (fileName.includes('/') || fileName.includes('\\')) {
+    // It's a relative path, resolve it relative to current working directory
+    const resolvedPath = path.resolve(fileName);
+    if (fs.existsSync(resolvedPath)) {
+      return resolvedPath;
+    } else {
+      console.error(`Error: File not found at path: ${fileName} (resolved to: ${resolvedPath})`);
+      process.exit(1);
+    }
+  }
+  
+  // It's just a filename like "en.json", search for it in srcDir
+  function searchForFile(dir: string, targetFile: string): string | null {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      
+      // First, check if the file exists in current directory
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === targetFile) {
+          return path.join(dir, entry.name);
+        }
+      }
+      
+      // Then search in subdirectories
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const fullPath = path.join(dir, entry.name);
+          const found = searchForFile(fullPath, targetFile);
+          if (found) {
+            return found;
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore permission errors and continue searching
+    }
+    
+    return null;
+  }
+  
+  const foundPath = searchForFile(srcDir, fileName);
+  if (!foundPath) {
+    console.error(`Error: Could not find ${fileName} in directory tree starting from ${srcDir}`);
+    process.exit(1);
+  }
+  
+  return foundPath;
+}
+
+// Updated argument parsing for multiple groups with optional --key-prefix and --pipe-name
 const args = process.argv.slice(2);
 interface Group {
   srcDir: string;
   i18nFile: string;
   keyPrefix?: string;
+  pipeName: string;
 }
 const groups: Group[] = [];
 let i = 0;
+const options = program.opts();
+const pipeName = options.pipeName || 'transloco'; // Default to 'transloco'
+
 while (i < args.length) {
   const srcDir = args[i];
-  const i18nFile = args[i + 1];
+  const i18nFileInput = args[i + 1];
   let keyPrefix: string | undefined = undefined;
   let next = i + 2;
   if (args[next] === '--key-prefix') {
     keyPrefix = args[next + 1];
     next += 2;
   }
-  if (!srcDir || !i18nFile) {
+  // Skip pipe-name option as it's already handled by commander
+  if (args[next] === '--pipe-name') {
+    next += 2;
+  }
+  if (!srcDir || !i18nFileInput) {
     console.error('Error: Each group must have at least <srcDir> and <i18nFile>');
     process.exit(1);
   }
-  groups.push({ srcDir, i18nFile, keyPrefix });
+  
+  // Find the actual i18n file path
+  const i18nFile = findI18nFile(srcDir, i18nFileInput);
+  
+  groups.push({ srcDir, i18nFile, keyPrefix, pipeName });
   i = next;
 }
 
@@ -380,27 +452,28 @@ function main(): number {
   let globalTotalMissingKeysEn = 0;
 
   for (let groupIdx = 0; groupIdx < groups.length; groupIdx++) {
-    const { srcDir, i18nFile, keyPrefix } = groups[groupIdx];
+    const { srcDir, i18nFile, keyPrefix, pipeName } = groups[groupIdx];
     // Exclude all other group paths that are subdirectories of this srcDir
     const excludeDirs = allGroupPaths
       .filter(p => p !== path.resolve(srcDir) && p.startsWith(path.resolve(srcDir) + path.sep));
     // Determine files to compare (all JSONs in the i18nFile's directory)
     const enDir = path.dirname(i18nFile);
     const allJsonFiles = fs.readdirSync(enDir)
-      .filter(f => f.endsWith('.json'))
-      .map(f => path.join(enDir, f));
-    const files = [i18nFile, ...allJsonFiles.filter(f => path.resolve(f) !== path.resolve(i18nFile))];
+      .filter((f: string) => f.endsWith('.json'))
+      .map((f: string) => path.join(enDir, f));
+    const files = [i18nFile, ...allJsonFiles.filter((f: string) => path.resolve(f) !== path.resolve(i18nFile))];
     const groupNumber = groupIdx + 1;
     let reportContent = '';
     reportContent += `\n==== GROUP ${groupNumber}: ${srcDir} ====`;
     reportContent += `\ni18nFile: ${i18nFile}`;
     reportContent += `\nkeyPrefix: ${keyPrefix ?? '(none)'}`;
+    reportContent += `\npipeName: ${pipeName}`;
     reportContent += `\nCompared files:\n`;
     for (const f of files) {
       reportContent += `  - ${f}\n`;
     }
     try {
-      const result = findMissingTranslations(srcDir, files, i18nFile, keyPrefix, excludeDirs);
+      const result = findMissingTranslations(srcDir, files, i18nFile, keyPrefix, pipeName, excludeDirs);
       const {
         missingKeysEn,
         missingTranslationsHtml,
@@ -451,8 +524,8 @@ function main(): number {
         reportContent += '\nNo missing static translations found in HTML files.\n';
       }
 
-      // Section: Transloco pipe keys
-      reportContent += '\n**** TRANLOCO PIPE KEYS ****\n';
+      // Section: Translation pipe keys
+      reportContent += `\n**** ${pipeName.toUpperCase()} PIPE KEYS ****\n`;
       if (Object.keys(missingTranslocoKeys).length > 0) {
         for (const key in missingTranslocoKeys) {
           reportContent += `\nKey: ${key}\n`;
@@ -461,13 +534,13 @@ function main(): number {
           }
         }
       } else {
-        reportContent += '\nNo missing transloco pipe keys found in HTML files.\n';
+        reportContent += `\nNo missing ${pipeName} pipe keys found in HTML files.\n`;
       }
 
       // Section: Summary
       reportContent += '\n>>>> SUMMARY <<<<\n';
       reportContent += `Total missing static translations: ${totalMissingStatic}\n`;
-      reportContent += `Total missing transloco pipe keys in translation json file: ${totalMissingTransloco}\n`;
+      reportContent += `Total missing ${pipeName} pipe keys in translation json file: ${totalMissingTransloco}\n`;
       reportContent += `Total missing keys in other translation files compared to en.json: ${totalMissingKeysEn}\n`;
       reportContent += `\nGroup report generated on: ${new Date().toLocaleString()}\n`;
 
@@ -504,7 +577,7 @@ function main(): number {
     }
     finalReport += '\nTOTALS ACROSS ALL GROUPS:\n';
     finalReport += `  Total missing static translations: ${globalTotalMissingStatic}\n`;
-    finalReport += `  Total missing transloco pipe keys in translation json file: ${globalTotalMissingTransloco}\n`;
+    finalReport += `  Total missing translation pipe keys in translation json file: ${globalTotalMissingTransloco}\n`;
     finalReport += `  Total missing keys in other translation files compared to en.json: ${globalTotalMissingKeysEn}\n`;
     finalReport += `\nReport generated on: ${new Date().toLocaleString()}\n`;
   } else {
