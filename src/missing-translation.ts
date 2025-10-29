@@ -625,25 +625,76 @@ function main(): number {
 }
 
 // Improved isNumericOnly
-// Returns true if the text is a number, math/logic expression, or JS-like expression
+// Returns true if the text is a number, math/logic expression, percentage, or JS-like expression
 // Used to filter out numbers and expressions from translation key checks
 function isNumericOnly(text: string): boolean {
   const trimmed = text.replace(/\s+/g, '');
-  // Pure number (e.g., '123')
-  if (/^\d+$/.test(trimmed)) return true;
-  // Pure expression (e.g., '1+2', '3*4', '5>2')
+  
+  // Pure number (e.g., '123', '0', '1.5')
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return true;
+  
+  // Percentage values (e.g., '8%', '100%', '12.5%')
+  if (/^\d+(\.\d+)?%$/.test(trimmed)) return true;
+  
+  // Currency values (e.g., '$100', '€50', '£25')
+  if (/^[€$£¥₹₽¢]?\d+(\.\d+)?[€$£¥₹₽¢]?$/.test(trimmed)) return true;
+  
+  // Common CSS units (px, em, rem, vh, vw, etc.)
+  if (/^\d+(\.\d+)?(px|em|rem|vh|vw|pt|pc|in|cm|mm|ex|ch)$/.test(trimmed)) return true;
+  
+  // Time and measurement units
+  if (/^\d+(\.\d+)?(s|ms|kg|g|lb|oz|m|km|ft)$/.test(trimmed)) return true;
+  
+  // Mathematical expressions (e.g., '1+2', '3*4', '5>2')
   if (/^[\d+\-*/().><=!&|?:]+$/.test(trimmed)) return true;
+  
   // Ternary or logical expressions (e.g., '1>0?4:5')
   if (/^\d+[\s><=!&|?:+\-*/().]*\d+$/.test(trimmed)) return true;
+  
   // JS expression: contains only numbers, operators, spaces, and curly braces
   if (/^[\d\s+\-*/().><=!&|?:{}]+$/.test(text)) return true;
+  
+  // Decimal numbers (e.g., '3.14', '0.5', '.25')
+  if (/^\d*\.\d+$/.test(trimmed)) return true;
+  
+  // Negative numbers (e.g., '-5', '-10%', '-$50')
+  if (/^-\d+(\.\d+)?[%€$£¥₹₽¢]?$/.test(trimmed)) return true;
+  
   return false;
 }
 
-// Helper function to check if text is an ignorable HTML entity
+// Helper function to check if text is an ignorable HTML entity or layout element
 function isIgnorableHtmlEntity(text: string): boolean {
-  // Ignore &nbsp;, &nbsp, and any other HTML entity if needed
-  return /^&nbsp;?$/i.test(text.trim());
+  const trimmed = text.trim();
+  
+  // Common HTML entities
+  if (/^&[a-zA-Z]+;?$/i.test(trimmed)) return true; // &nbsp;, &amp;, &lt;, etc.
+  
+  // HTML entities with numbers
+  if (/^&#\d+;?$/i.test(trimmed)) return true; // &#160;, &#8203;, etc.
+  
+  // Hex HTML entities
+  if (/^&#x[0-9a-f]+;?$/i.test(trimmed)) return true; // &#x00A0;, etc.
+  
+  // Common layout patterns with HTML entities
+  if (/^(&nbsp;?\s*[|•·…\-–—]\s*&nbsp;?)+$/i.test(trimmed)) return true; // &nbsp;-&nbsp;, &nbsp;|&nbsp;, etc.
+  
+  // Multiple consecutive HTML entities or spaces
+  if (/^(&nbsp;?\s*)+$/i.test(trimmed)) return true; // &nbsp; &nbsp;, multiple spaces
+  
+  // Common separators and symbols only
+  if (/^[\s\-–—|•·…]+$/.test(trimmed)) return true; // just dashes, pipes, bullets, etc.
+  
+  // Single special characters
+  if (/^[•·…\-–—|/\\]+$/.test(trimmed)) return true; // bullets, dashes, slashes
+  
+  // Whitespace-only content (spaces, tabs, newlines)
+  if (/^\s+$/.test(trimmed)) return true;
+  
+  // Empty or very short non-meaningful content
+  if (trimmed.length === 0 || /^[|•·…\s]{1,3}$/.test(trimmed)) return true;
+  
+  return false;
 }
 
 // Helper function to check if a key exists in translations, with optional prefix logic
