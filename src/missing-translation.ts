@@ -168,14 +168,63 @@ function findMissingTranslations(
   // Generalized function to ignore Angular control flow and template syntax
   function isTemplateControlFlow(text: string): boolean {
     const trimmed = text.trim();
-    // Ignore lines that start with @ and end with {
-    if (/^@.*\{$/.test(trimmed)) return true;
-    // Ignore lines that are just }
-    if (trimmed === '}') return true;
-    // Ignore lines that start with } and then @...{
-    if (/^}\s*@.*\{$/.test(trimmed)) return true;
-    // Ignore lines that are just symbols, whitespace, or braces
-    if (/^[\s{}()=><!&|?:;.,'"\[\]-]*$/.test(trimmed)) return true;
+    
+    // Empty or just whitespace/braces/symbols
+    if (!trimmed || /^[\s{}()=><!&|?:;.,'"-]*$/.test(trimmed)) return true;
+    
+    // Angular 18 control flow syntax - any @keyword
+    if (/^@(if|for|switch|defer|loading|error|placeholder|empty|case|default|else)\b/.test(trimmed)) return true;
+    
+    // Complex patterns with multiple braces and Angular syntax
+    if (/^[}\s]*@(if|for|switch|case|default|else)\b/.test(trimmed)) return true;
+    
+    // Patterns ending with Angular control flow
+    if (/@(if|for|switch|case|default|else)\b.*\{?\s*@?/.test(trimmed)) return true;
+    
+    // Multiple closing braces followed by Angular syntax or conditions
+    if (/^}\s*}\s*@/.test(trimmed)) return true;
+    
+    // Complex Angular conditions - split into smaller checks
+    if (containsAngularConditions(trimmed)) return true;
+    
+    // HTML/CSS patterns mixed with control flow
+    if (/^\d+\s*}[">]*\s*@/.test(trimmed)) return true;
+    
+    // Angular variable patterns and property access
+    if (/^[@$]\w+/.test(trimmed)) return true;
+    if (/\w+\.\w+\??\.\w+/.test(trimmed)) return true;
+    if (/FormFieldTypeModel|field\.data\.type/.test(trimmed)) return true;
+    
+    // Track expressions and let declarations
+    if (/track\s+\w+\.\w+|let\s+\w+\s*=|\btrack\b|\bof\b/.test(trimmed)) return true;
+    
+    // Component and service patterns
+    if (/accordionList\.length|accordion/i.test(trimmed)) return true;
+    
+    // Complex mixed patterns (braces + conditions + Angular syntax)
+    if (/^[}\s]*.*@(if|case|for|switch|default).*[}\s]*$/i.test(trimmed)) return true;
+    
+    // Patterns with comparison operators and model references
+    if (/===|!==|&&|\|\||field\.|FormField|TypeModel|\.data\.|\.type/.test(trimmed)) return true;
+    
+    // Just numbers followed by control flow
+    if (/^\d+[}\s">]*@/.test(trimmed)) return true;
+    
+    // HTML entities mixed with control flow
+    if (/&nbsp;.*}|}&nbsp;/.test(trimmed)) return true;
+    
+    return false;
+  }
+
+  // Helper function to check Angular conditions
+  function containsAngularConditions(text: string): boolean {
+    // Check for @case, @if, @for, @switch with conditions
+    if (/@(case|if|for|switch)\s*\(/.test(text)) {
+      // Check for common Angular patterns
+      if (/\w+\.\w+/.test(text)) return true;
+      if (/===|!==|&&|\|\|/.test(text)) return true;
+      if (/>|<|>=|<=/.test(text)) return true;
+    }
     return false;
   }
 
@@ -220,12 +269,12 @@ function findMissingTranslations(
             if (
               content &&
               /[a-zA-Z0-9]/.test(content) && // must contain at least one letter or number
-              !/^=/.test(content) && // does not start with '='
-              !/>$/.test(content) && // does not end with '>'
+              !content.startsWith('=') && // does not start with '='
+              !content.endsWith('>') && // does not end with '>'
               !/^([=><!{}\[\]"'\s:.()-]|d-none)+$/.test(content) // not just symbols/attribute syntax
             ) {
-              // Check for translation pipe (dynamic pipe name)
-              const pipeRegex = new RegExp(`{{\\s*['"]([^'"]+)['"]\\s*\\|\\s*${pipeName}\\s*}}`, 's');
+              // Check for translation pipe (dynamic pipe name) - updated to handle parameters
+              const pipeRegex = new RegExp(`{{\\s*['"]([^'"]+)['"]\\s*\\|\\s*${pipeName}(?:\\s*:\\s*[^}]+)?\\s*}}`, 's');
               const pipeMatch = pipeRegex.exec(content);
               if (pipeMatch) {
                 // Extract key and record as translation pipe key
@@ -258,6 +307,27 @@ function findMissingTranslations(
           i++;
         }
       });
+
+      // Additional scan for translation pipes in Angular 18 control flow blocks and entire content
+      // This catches pipes that might be inside @if, @for, @switch blocks or anywhere else
+      const globalPipeRegex = new RegExp(`{{\\s*['"]([^'"]+)['"]\\s*\\|\\s*${pipeName}(?:\\s*:\\s*[^}]+)?\\s*}}`, 'g');
+      let globalMatch;
+      const contentLines = content.split(/\r?\n/);
+      while ((globalMatch = globalPipeRegex.exec(content)) !== null) {
+        const key = globalMatch[1].trim();
+        // Find which line this match is on
+        const beforeMatch = content.substring(0, globalMatch.index);
+        const lineNumber = beforeMatch.split(/\r?\n/).length;
+        
+        // Check if this key was already found (avoid duplicates)
+        const alreadyFound = translocoKeyOccurrences.some(item => 
+          item.key === key && item.line === lineNumber
+        );
+        
+        if (!alreadyFound) {
+          translocoKeyOccurrences.push({ key, line: lineNumber });
+        }
+      }
 
       // Check missing static text
       for (const { key, line } of staticTextOccurrences) {
@@ -667,7 +737,10 @@ function isNumericOnly(text: string): boolean {
 function isIgnorableHtmlEntity(text: string): boolean {
   const trimmed = text.trim();
   
-  // Common HTML entities
+  // Empty content
+  if (!trimmed) return true;
+  
+  // Single HTML entities
   if (/^&[a-zA-Z]+;?$/i.test(trimmed)) return true; // &nbsp;, &amp;, &lt;, etc.
   
   // HTML entities with numbers
@@ -675,6 +748,15 @@ function isIgnorableHtmlEntity(text: string): boolean {
   
   // Hex HTML entities
   if (/^&#x[0-9a-f]+;?$/i.test(trimmed)) return true; // &#x00A0;, etc.
+  
+  // Copyright notices with years
+  if (/^&copy;\s*\d{4}$/i.test(trimmed)) return true; // &copy; 2024
+  
+  // HTML encoded tags
+  if (/^&lt;\w+&gt;$/i.test(trimmed)) return true; // &lt;script&gt;, &lt;div&gt;
+  
+  // Complex patterns: check individual components
+  if (containsOnlyHtmlEntitiesAndNumbers(trimmed)) return true;
   
   // Common layout patterns with HTML entities
   if (/^(&nbsp;?\s*[|•·…\-–—]\s*&nbsp;?)+$/i.test(trimmed)) return true; // &nbsp;-&nbsp;, &nbsp;|&nbsp;, etc.
@@ -695,6 +777,28 @@ function isIgnorableHtmlEntity(text: string): boolean {
   if (trimmed.length === 0 || /^[|•·…\s]{1,3}$/.test(trimmed)) return true;
   
   return false;
+}
+
+// Helper function to check if text contains only HTML entities, numbers, and whitespace
+function containsOnlyHtmlEntitiesAndNumbers(text: string): boolean {
+  // Split by spaces and check each part
+  const parts = text.split(/\s+/).filter(part => part.length > 0);
+  
+  for (const part of parts) {
+    // Check if it's an HTML entity
+    if (/^&[a-zA-Z]+;?$/i.test(part)) continue;
+    
+    // Check if it's an HTML encoded tag
+    if (/^&lt;\w+&gt;$/i.test(part)) continue;
+    
+    // Check if it's a year (4 digits)
+    if (/^\d{4}$/.test(part)) continue;
+    
+    // If none of the above, it's not ignorable
+    return false;
+  }
+  
+  return true;
 }
 
 // Helper function to check if a key exists in translations, with optional prefix logic
